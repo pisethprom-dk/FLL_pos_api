@@ -1,4 +1,4 @@
-<!-- v1.3.2 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
+<!-- v1.3.3 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
 
 # POS — tool shop, single outlet
 
@@ -7,7 +7,8 @@ riel across the counter, sells to walk-ins and to trade customers on credit,
 quotes contractors, tracks stock by moving average, logs warranty claims.
 
 **Stack:** Django 5.1 + DRF + Postgres 16, in Docker. Angular 22 frontend in a
-separate sibling project, `../pos_frontend` (not started). Deployed on Linux.
+separate sibling project, `../pos_frontend` (scaffolded; its own CLAUDE.md
+has the frontend rules). Deployed on Linux.
 
 ---
 
@@ -235,7 +236,7 @@ caps the whole session at 12 hours.
 Serve Angular and the API from one origin through nginx. Cross-origin cookies
 with credentials are a harder problem than it looks.
 
-### Frontend (decided, not started)
+### Frontend (scaffolded in `../pos_frontend`)
 
 - Angular 22 in `../pos_frontend`, its own git repo and its own CLAUDE.md.
   Node 22 LTS via nvm (`.nvmrc`); this Mac's default Node 16 is too old.
