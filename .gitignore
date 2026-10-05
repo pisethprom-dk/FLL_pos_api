@@ -1,0 +1,16 @@
+# v1.0.0 — kept out of git
+# Secrets: .env holds the real SECRET_KEY and database password. .env.example is committed.
+.env
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+# Local and generated
+db.sqlite3
+media/
+staticfiles/
+test_settings_local.py
+*.log
+# Editors and macOS
+.idea/
+.DS_Store

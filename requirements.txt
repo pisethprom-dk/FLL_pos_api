@@ -1,0 +1,14 @@
+# v1.0.2 — POS backend dependencies
+Django==5.1.6
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.4.0
+psycopg[binary]==3.2.4
+# required by ImageField — company logo, payment note QR,
+# category, brand and product images
+Pillow==11.1.0
+django-environ==0.12.0
+django-cors-headers==4.6.0
+drf-spectacular==0.28.0
+gunicorn==23.0.0
+# reads .xlsx files for the stock document import
+openpyxl==3.1.5
