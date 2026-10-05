@@ -1,4 +1,4 @@
-# v1.0.1
+# v1.0.2
 from rest_framework import serializers
 
 from catalogue.models import Brand, Category, Product, Unit
@@ -6,7 +6,7 @@ from catalogue.models import Brand, Category, Product, Unit
 
 class CategorySerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(read_only=True)
-    parent_name = serializers.CharField(source="parent.name", read_only=True, default=None)
+    parent_name = serializers.CharField(source="parent.name", read_only=True, default=None, allow_null=True)
 
     class Meta:
         model = Category
@@ -52,7 +52,7 @@ class UnitSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.full_name", read_only=True)
-    brand_name = serializers.CharField(source="brand.name", read_only=True, default=None)
+    brand_name = serializers.CharField(source="brand.name", read_only=True, default=None, allow_null=True)
     unit_name = serializers.CharField(source="unit.name", read_only=True)
     stock_value = serializers.DecimalField(
         max_digits=14, decimal_places=2, read_only=True
@@ -102,7 +102,7 @@ class ProductSerializer(serializers.ModelSerializer):
 class ProductLookupSerializer(serializers.ModelSerializer):
     """Small payload for the till and the stock document line pickers."""
 
-    brand_name = serializers.CharField(source="brand.name", read_only=True, default=None)
+    brand_name = serializers.CharField(source="brand.name", read_only=True, default=None, allow_null=True)
     unit_name = serializers.CharField(source="unit.name", read_only=True)
 
     class Meta:

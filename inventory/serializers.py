@@ -1,4 +1,4 @@
-# v1.0.1
+# v1.0.2
 from decimal import Decimal
 
 from django.db import transaction
@@ -43,8 +43,8 @@ class DocumentSerializer(serializers.ModelSerializer):
     """
 
     status = serializers.ChoiceField(choices=DocStatus.choices, read_only=True)
-    posted_by_name = serializers.CharField(source="posted_by.full_name", read_only=True, default=None)
-    reverses_number = serializers.CharField(source="reverses.number", read_only=True, default=None)
+    posted_by_name = serializers.CharField(source="posted_by.full_name", read_only=True, default=None, allow_null=True)
+    reverses_number = serializers.CharField(source="reverses.number", read_only=True, default=None, allow_null=True)
     reversed_by_number = serializers.SerializerMethodField()
 
     @extend_schema_field(serializers.CharField(allow_null=True))
@@ -97,7 +97,7 @@ class StockInLineSerializer(serializers.ModelSerializer):
     product_code = serializers.CharField(source="product.code", read_only=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
     unit_name = serializers.CharField(source="product.unit.name", read_only=True)
-    pack_unit_name = serializers.CharField(source="pack_unit.name", read_only=True, default=None)
+    pack_unit_name = serializers.CharField(source="pack_unit.name", read_only=True, default=None, allow_null=True)
 
     class Meta:
         model = StockInLine
@@ -167,7 +167,7 @@ class AdjustmentLineSerializer(serializers.ModelSerializer):
 
 
 class AdjustmentSerializer(DocumentSerializer):
-    supplier_name = serializers.CharField(source="supplier.name", read_only=True, default=None)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True, default=None, allow_null=True)
     direction = serializers.SerializerMethodField()
     lines = AdjustmentLineSerializer(many=True, required=False)
 
@@ -253,7 +253,7 @@ class StockCountLineSerializer(serializers.ModelSerializer):
 
 class StockCountSerializer(DocumentSerializer):
     category_name = serializers.CharField(source="category.full_name", read_only=True)
-    counted_by_name = serializers.CharField(source="counted_by.full_name", read_only=True, default=None)
+    counted_by_name = serializers.CharField(source="counted_by.full_name", read_only=True, default=None, allow_null=True)
     lines_total = serializers.SerializerMethodField()
     lines_counted = serializers.SerializerMethodField()
     lines = StockCountLineSerializer(many=True, read_only=True)
@@ -341,7 +341,7 @@ class ImportResultSerializer(serializers.Serializer):
 class StockMovementSerializer(serializers.ModelSerializer):
     product_code = serializers.CharField(source="product.code", read_only=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
-    posted_by_name = serializers.CharField(source="posted_by.full_name", read_only=True, default=None)
+    posted_by_name = serializers.CharField(source="posted_by.full_name", read_only=True, default=None, allow_null=True)
     value = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
 
     class Meta:

@@ -1,4 +1,4 @@
-# v1.0.1
+# v1.0.2
 from decimal import Decimal
 
 from django.db import transaction
@@ -25,6 +25,7 @@ from sales.models import (
     ReturnStatus,
     SalesReturn,
 )
+from partners.models import PriceTier
 from sales.money import TENDER_KINDS
 from sales.services import returnable
 from users.scopes import has_scope
@@ -105,11 +106,12 @@ class QuotationSerializer(LinesMixin, serializers.ModelSerializer):
 
     customer_name = serializers.CharField(source="customer.name", read_only=True)
     status = serializers.ChoiceField(choices=QuoteStatus.choices, read_only=True)
+    price_tier = serializers.ChoiceField(choices=PriceTier.choices, read_only=True)
     is_expired = serializers.BooleanField(read_only=True)
     total = serializers.SerializerMethodField()
     invoiced_total = serializers.SerializerMethodField()
     remaining_total = serializers.SerializerMethodField()
-    created_by_name = serializers.CharField(source="created_by.full_name", read_only=True, default=None)
+    created_by_name = serializers.CharField(source="created_by.full_name", read_only=True, default=None, allow_null=True)
     lines = QuotationLineSerializer(many=True, required=False)
 
     class Meta:
@@ -217,9 +219,10 @@ class InvoiceSerializer(LinesMixin, serializers.ModelSerializer):
 
     customer_name = serializers.CharField(source="customer.name", read_only=True)
     status = serializers.ChoiceField(choices=InvoiceStatus.choices, read_only=True)
-    quotation_number = serializers.CharField(source="quotation.number", read_only=True, default=None)
-    seller_name = serializers.CharField(source="seller.full_name", read_only=True, default=None)
-    voided_by_name = serializers.CharField(source="voided_by.full_name", read_only=True, default=None)
+    price_tier = serializers.ChoiceField(choices=PriceTier.choices, read_only=True)
+    quotation_number = serializers.CharField(source="quotation.number", read_only=True, default=None, allow_null=True)
+    seller_name = serializers.CharField(source="seller.full_name", read_only=True, default=None, allow_null=True)
+    voided_by_name = serializers.CharField(source="voided_by.full_name", read_only=True, default=None, allow_null=True)
     held_total = serializers.SerializerMethodField()
     total_khr = serializers.SerializerMethodField()
     cost_total = serializers.SerializerMethodField(help_text="Null unless the user may see cost.")
@@ -342,8 +345,8 @@ class AllocationSerializer(serializers.ModelSerializer):
 class CustomerPaymentSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source="customer.name", read_only=True)
     status = serializers.ChoiceField(choices=PaymentStatus.choices, read_only=True)
-    taken_by_name = serializers.CharField(source="created_by.full_name", read_only=True, default=None)
-    voided_by_name = serializers.CharField(source="voided_by.full_name", read_only=True, default=None)
+    taken_by_name = serializers.CharField(source="created_by.full_name", read_only=True, default=None, allow_null=True)
+    voided_by_name = serializers.CharField(source="voided_by.full_name", read_only=True, default=None, allow_null=True)
     allocations = AllocationSerializer(many=True, required=False)
 
     class Meta:
