@@ -1,4 +1,5 @@
-# v1.0.0
+# v1.0.1
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -8,11 +9,13 @@ from company.currency import BASE_CURRENCY, DECIMALS, NOTES, ROUNDING_STEP, SYMB
 from company.models import CompanyProfile, DocumentCounter, ExchangeRate, PaymentNote
 from company.serializers import (
     CompanyProfileSerializer,
+    CurrentRateSerializer,
     DocumentCounterSerializer,
     ExchangeRateSerializer,
     PaymentNoteSerializer,
 )
 from company.services import current_rate
+from core.schema import ACTIVE
 from users.permissions import IsAdmin, IsAdminOrReadOnly
 
 
@@ -21,9 +24,11 @@ class CompanyProfileView(APIView):
 
     permission_classes = [IsAdminOrReadOnly]
 
+    @extend_schema(responses={200: CompanyProfileSerializer})
     def get(self, request):
         return Response(CompanyProfileSerializer(CompanyProfile.get()).data)
 
+    @extend_schema(request=CompanyProfileSerializer, responses={200: CompanyProfileSerializer})
     def patch(self, request):
         serializer = CompanyProfileSerializer(
             CompanyProfile.get(), data=request.data, partial=True
@@ -48,17 +53,18 @@ class CurrentRateView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: CurrentRateSerializer})
     def get(self, request):
         rate = current_rate()
-        return Response({
+        return Response(CurrentRateSerializer({
             "base_currency": BASE_CURRENCY,
             "effective_date": rate.effective_date,
-            "rate": str(rate.rate),
+            "rate": rate.rate,
             "decimals": DECIMALS,
             "rounding_step": {k: str(v) for k, v in ROUNDING_STEP.items()},
             "symbol": SYMBOL,
             "notes": {k: [str(n) for n in v] for k, v in NOTES.items()},
-        })
+        }).data)
 
 
 class DocumentCounterViewSet(viewsets.ModelViewSet):
@@ -71,6 +77,7 @@ class DocumentCounterViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "patch", "head", "options"]
 
 
+@extend_schema_view(list=extend_schema(parameters=[ACTIVE]))
 class PaymentNoteViewSet(viewsets.ModelViewSet):
     queryset = PaymentNote.objects.all()
     serializer_class = PaymentNoteSerializer

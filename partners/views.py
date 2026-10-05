@@ -1,9 +1,11 @@
-# v1.0.0
+# v1.0.1
 from django.db.models import Q
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from core.schema import ACTIVE, PRODUCT, SEARCH, SUPPLIER, flag, query
 from core.views import ActiveFilterMixin, AuditMixin
 from partners.models import Customer, ProductSupplier, Supplier
 from partners.serializers import (
@@ -27,6 +29,15 @@ def search(qs, term):
     return qs.filter(q)
 
 
+CUSTOMER_FILTERS = [
+    ACTIVE, SEARCH,
+    query("price_tier", str, "Price tier.", enum=["RETAIL", "WHOLESALE"]),
+    query("credit", str, "yes: allowed credit (on hold included); no: cash only; hold: on credit hold.",
+          enum=["yes", "no", "hold"]),
+]
+
+
+@extend_schema_view(list=extend_schema(parameters=CUSTOMER_FILTERS))
 class CustomerViewSet(AuditMixin, ActiveFilterMixin, viewsets.ModelViewSet):
     """No delete: customers have sales against them, so they are deactivated."""
 
@@ -56,7 +67,8 @@ class CustomerViewSet(AuditMixin, ActiveFilterMixin, viewsets.ModelViewSet):
             qs = search(qs, p["search"])
         return qs
 
-    @action(detail=False, methods=["get"])
+    @extend_schema(parameters=CUSTOMER_FILTERS, responses={200: CustomerLookupSerializer(many=True)})
+    @action(detail=False, methods=["get"], pagination_class=None)
     def lookup(self, request):
         """Small payload for the till. Active only, walk-in first."""
         qs = (
@@ -67,6 +79,12 @@ class CustomerViewSet(AuditMixin, ActiveFilterMixin, viewsets.ModelViewSet):
         return Response(CustomerLookupSerializer(qs, many=True).data)
 
 
+@extend_schema_view(list=extend_schema(parameters=[
+    ACTIVE, SEARCH,
+    query("supplier_type", str, "Supplier type.", enum=[
+        "MANUFACTURER", "IMPORTER", "DISTRIBUTOR", "WHOLESALER", "SERVICE_CENTRE", "LOCAL_MARKET",
+    ]),
+]))
 class SupplierViewSet(AuditMixin, ActiveFilterMixin, viewsets.ModelViewSet):
     """No delete: past stock-ins keep their supplier, so it is deactivated."""
 
@@ -85,6 +103,9 @@ class SupplierViewSet(AuditMixin, ActiveFilterMixin, viewsets.ModelViewSet):
         return qs
 
 
+@extend_schema_view(list=extend_schema(parameters=[
+    PRODUCT, SUPPLIER, flag("preferred", "Preferred links only."),
+]))
 class ProductSupplierViewSet(AuditMixin, viewsets.ModelViewSet):
     """Links may be deleted — they carry no history."""
 

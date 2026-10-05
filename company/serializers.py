@@ -1,4 +1,5 @@
-# v1.0.0
+# v1.0.1
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from company.models import CompanyProfile, DocumentCounter, ExchangeRate, PaymentNote
@@ -24,6 +25,7 @@ class ExchangeRateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at"]
 
+    @extend_schema_field(serializers.BooleanField())
     def get_is_in_use(self, obj):
         return rate_is_in_use(obj)
 
@@ -35,6 +37,18 @@ class ExchangeRateSerializer(serializers.ModelSerializer):
                 "effective date instead."
             )
         return attrs
+
+
+class CurrentRateSerializer(serializers.Serializer):
+    """Everything the till needs about money in one call."""
+
+    base_currency = serializers.CharField()
+    effective_date = serializers.DateField()
+    rate = serializers.DecimalField(max_digits=18, decimal_places=6)
+    decimals = serializers.DictField(child=serializers.IntegerField())
+    rounding_step = serializers.DictField(child=serializers.CharField())
+    symbol = serializers.DictField(child=serializers.CharField())
+    notes = serializers.DictField(child=serializers.ListField(child=serializers.CharField()))
 
 
 class DocumentCounterSerializer(serializers.ModelSerializer):

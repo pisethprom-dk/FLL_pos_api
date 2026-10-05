@@ -1,15 +1,18 @@
-# v1.0.0
+# v1.0.1
 from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from core.exceptions import PostedDocumentError
+from core.schema import money
 from inventory.models import (
     Adjustment,
     AdjustmentLine,
     AdjustmentReason,
+    DocStatus,
     StockCount,
     StockCountLine,
     StockIn,
@@ -39,10 +42,12 @@ class DocumentSerializer(serializers.ModelSerializer):
     Leave `lines` out to change the header only.
     """
 
+    status = serializers.ChoiceField(choices=DocStatus.choices, read_only=True)
     posted_by_name = serializers.CharField(source="posted_by.full_name", read_only=True, default=None)
     reverses_number = serializers.CharField(source="reverses.number", read_only=True, default=None)
     reversed_by_number = serializers.SerializerMethodField()
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_reversed_by_number(self, obj):
         reversal = getattr(obj, "reversed_by", None)
         return reversal.number if reversal else None
@@ -114,8 +119,9 @@ class StockInSerializer(DocumentSerializer):
         fields = DOCUMENT_FIELDS + ["supplier", "supplier_name", "supplier_ref", "total", "lines"]
         read_only_fields = DOCUMENT_READ_ONLY
 
+    @extend_schema_field(money())
     def get_total(self, obj):
-        return str(sum((line.line_total for line in obj.lines.all()), 0))
+        return str(sum((line.line_total for line in obj.lines.all()), Decimal("0.00")))
 
     def validate_supplier(self, supplier):
         changing = not self.instance or self.instance.supplier_id != supplier.pk
@@ -172,6 +178,7 @@ class AdjustmentSerializer(DocumentSerializer):
         ]
         read_only_fields = DOCUMENT_READ_ONLY
 
+    @extend_schema_field(serializers.ChoiceField(choices=["IN", "OUT"]))
     def get_direction(self, obj):
         return "IN" if obj.is_inbound else "OUT"
 
@@ -224,6 +231,7 @@ class StockCountLineSerializer(serializers.ModelSerializer):
     shelf_location = serializers.CharField(source="product.shelf_location", read_only=True)
     unit_name = serializers.CharField(source="product.unit.name", read_only=True)
 
+    # Sent as null, not left out, so the generated client's types stay true.
     HIDDEN_WHILE_COUNTING = ("expected_qty", "difference", "unit_cost", "value")
 
     class Meta:
@@ -239,7 +247,7 @@ class StockCountLineSerializer(serializers.ModelSerializer):
         data = super().to_representation(line)
         if not line.document.is_posted:
             for field in self.HIDDEN_WHILE_COUNTING:
-                data.pop(field, None)
+                data[field] = None
         return data
 
 
@@ -258,9 +266,11 @@ class StockCountSerializer(DocumentSerializer):
         ]
         read_only_fields = DOCUMENT_READ_ONLY
 
+    @extend_schema_field(serializers.IntegerField())
     def get_lines_total(self, obj):
         return len(obj.lines.all())
 
+    @extend_schema_field(serializers.IntegerField())
     def get_lines_counted(self, obj):
         return sum(1 for line in obj.lines.all() if line.counted_qty is not None)
 
@@ -305,6 +315,25 @@ class ImportSerializer(serializers.Serializer):
     commit = serializers.BooleanField(
         default=False, help_text="False checks the file and adds nothing."
     )
+
+
+class ImportRowSerializer(serializers.Serializer):
+    row = serializers.IntegerField(help_text="Spreadsheet row number.")
+    code = serializers.CharField()
+    product = serializers.IntegerField(allow_null=True)
+    product_name = serializers.CharField()
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    unit_cost = serializers.DecimalField(max_digits=12, decimal_places=4, allow_null=True)
+    pack_size = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    pack_unit = serializers.IntegerField(allow_null=True)
+    result = serializers.CharField(help_text='"Matched", or what is wrong with the row.')
+
+
+class ImportResultSerializer(serializers.Serializer):
+    rows = ImportRowSerializer(many=True)
+    ready = serializers.IntegerField()
+    to_fix = serializers.IntegerField()
+    imported = serializers.IntegerField()
 
 
 # --- ledger ------------------------------------------------------------------------

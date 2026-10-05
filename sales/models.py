@@ -1,4 +1,4 @@
-# v1.0.0 — quotation, invoice, customer payment and return.
+# v1.0.1 — quotation, invoice, customer payment and return.
 #
 # Each document guards itself: once it leaves its editable state the model
 # refuses save() and delete(). State changes after that are made by
@@ -18,7 +18,7 @@ from company.services import next_document_number
 from core.exceptions import DomainError, PostedDocumentError
 from core.models import TimeStampedModel
 from partners.models import Customer, PriceTier
-from sales.money import AMOUNT, CASH, CREDIT, KHQR, PERCENT, net_price
+from sales.money import AMOUNT, PERCENT, TENDER_KINDS, net_price
 
 ZERO = Decimal("0.00")
 QUOTE_VALID_DAYS = 30
@@ -328,10 +328,8 @@ class InvoiceLine(PricedLine):
 class InvoiceTender(models.Model):
     """How a completed sale was paid at the till. Written once, by completion."""
 
-    KIND_CHOICES = [(CASH, "Cash"), (KHQR, "KHQR"), (CREDIT, "Credit")]
-
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name="tenders")
-    kind = models.CharField(max_length=10, choices=KIND_CHOICES)
+    kind = models.CharField(max_length=10, choices=TENDER_KINDS)
     currency = models.CharField(max_length=3, choices=Currency.choices, default=Currency.USD)
     amount = models.DecimalField(max_digits=14, decimal_places=2, help_text="In its own currency.")
     amount_usd = models.DecimalField(max_digits=14, decimal_places=2)

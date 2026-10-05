@@ -1,5 +1,6 @@
-# v1.0.1
+# v1.0.2
 from django.conf import settings
+from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -7,13 +8,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 
+from core.schema import DetailSerializer
 from users.models import User
 from users.passwords import make_initial_password
 from users.permissions import IsAdmin
 from users.serializers import (
+    InitialPasswordSerializer,
     LoginSerializer,
     MeSerializer,
     PasswordChangeSerializer,
+    SessionSerializer,
+    UserCreatedSerializer,
     UserCreateSerializer,
     UserSerializer,
 )
@@ -31,6 +36,7 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    @extend_schema(request=LoginSerializer, responses={200: SessionSerializer})
     def post(self, request):
         serializer = LoginSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
@@ -49,6 +55,11 @@ class RefreshView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    @extend_schema(
+        request=None,
+        responses={200: SessionSerializer, 401: DetailSerializer},
+        description="Reads the refresh cookie, rotates it, and returns a new access token.",
+    )
     def post(self, request):
         raw = request.COOKIES.get(settings.AUTH_COOKIE_NAME)
         if not raw:
@@ -71,6 +82,7 @@ class LogoutView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    @extend_schema(request=None, responses={200: DetailSerializer})
     def post(self, request):
         raw = request.COOKIES.get(settings.AUTH_COOKIE_NAME)
         if raw:
@@ -86,6 +98,7 @@ class LogoutView(APIView):
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: MeSerializer})
     def get(self, request):
         return Response(MeSerializer(request.user).data)
 
@@ -93,6 +106,7 @@ class MeView(APIView):
 class PasswordChangeView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=PasswordChangeSerializer, responses={200: DetailSerializer})
     def post(self, request):
         serializer = PasswordChangeSerializer(
             data=request.data, context={"request": request}
@@ -112,6 +126,7 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         return UserCreateSerializer if self.action == "create" else UserSerializer
 
+    @extend_schema(request=UserCreateSerializer, responses={201: UserCreatedSerializer})
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -121,6 +136,7 @@ class UserViewSet(viewsets.ModelViewSet):
         data["initial_password"] = serializer._initial_password
         return Response(data, status=status.HTTP_201_CREATED)
 
+    @extend_schema(request=None, responses={200: UserSerializer, 400: DetailSerializer})
     @action(detail=True, methods=["post"])
     def deactivate(self, request, pk=None):
         user = self.get_object()
@@ -133,6 +149,7 @@ class UserViewSet(viewsets.ModelViewSet):
         user.save(update_fields=["is_active"])
         return Response(UserSerializer(user).data)
 
+    @extend_schema(request=None, responses={200: UserSerializer})
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
         user = self.get_object()
@@ -140,6 +157,7 @@ class UserViewSet(viewsets.ModelViewSet):
         user.save(update_fields=["is_active"])
         return Response(UserSerializer(user).data)
 
+    @extend_schema(request=None, responses={200: InitialPasswordSerializer})
     @action(detail=True, methods=["post"], url_path="reset-password")
     def reset_password(self, request, pk=None):
         user = self.get_object()

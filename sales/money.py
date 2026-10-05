@@ -1,4 +1,4 @@
-# v1.0.0 — the money rules of a sale, as plain functions.
+# v1.0.1 — the money rules of a sale, as plain functions.
 #
 # Discount is per line only — there is no invoice-level or quote-level
 # discount (owner's decision). The discounted unit price is the line's price,
@@ -21,6 +21,7 @@ AMOUNT = "AMOUNT"
 CASH = "CASH"
 KHQR = "KHQR"
 CREDIT = "CREDIT"
+TENDER_KINDS = [(CASH, "Cash"), (KHQR, "KHQR"), (CREDIT, "Credit")]
 
 
 def net_price(price, kind, value, price_fixed=False):

@@ -1,4 +1,4 @@
-# v1.0.4 — POS backend settings
+# v1.0.5 — POS backend settings
 from datetime import timedelta
 from pathlib import Path
 
@@ -143,4 +143,16 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Point of sale back office for a single tool shop.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # Separate request and response models, so a generated client does not
+    # ask the caller for read-only fields such as id or number.
+    "COMPONENT_SPLIT_REQUEST": True,
+    # Readable enum names in the generated client, instead of hashed ones.
+    "ENUM_NAME_OVERRIDES": {
+        "DraftPostedStatusEnum": "inventory.models.DocStatus",
+        "QuoteStatusEnum": "sales.models.QuoteStatus",
+        "InvoiceStatusEnum": "sales.models.InvoiceStatus",
+        "PaymentStatusEnum": "sales.models.PaymentStatus",
+        "TenderKindEnum": "sales.money.TENDER_KINDS",
+        "PaymentTenderEnum": "sales.models.PaymentTender",
+    },
 }

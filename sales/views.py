@@ -1,13 +1,17 @@
-# v1.0.0 — /api/sales/
+# v1.0.1 — /api/sales/
+from decimal import Decimal
+
 from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.schema import CUSTOMER, DATE_FROM, DATE_TO, SEARCH, flag, query, status_filter
 from core.views import AuditMixin
 from partners.models import Customer
 from sales.models import (
@@ -23,6 +27,7 @@ from sales.models import (
 from sales.money import Tender
 from sales.serializers import (
     CompleteSerializer,
+    CustomerAccountSerializer,
     CustomerPaymentSerializer,
     InvoiceSerializer,
     NoteSerializer,
@@ -45,6 +50,9 @@ from sales.services import (
 from users.permissions import CanVoidInvoice, HasReadWriteScope, IsAdmin
 
 
+ZERO = Decimal("0.00")
+
+
 class DateRangeMixin:
     date_field = None
 
@@ -62,6 +70,10 @@ class DateRangeMixin:
         return qs
 
 
+def list_filters(*statuses, extra=()):
+    return [status_filter(*statuses), CUSTOMER, DATE_FROM, DATE_TO, *extra]
+
+
 class SalesViewSet(AuditMixin, DateRangeMixin, viewsets.ModelViewSet):
     permission_classes = [HasReadWriteScope]
 
@@ -71,6 +83,15 @@ class SalesViewSet(AuditMixin, DateRangeMixin, viewsets.ModelViewSet):
         return Response(serializer.data, status=status_code)
 
 
+@extend_schema_view(
+    list=extend_schema(parameters=list_filters(
+        "DRAFT", "SENT", "ACCEPTED", "REJECTED", "INVOICED",
+        extra=[flag("open", "Draft, sent or accepted."), SEARCH],
+    )),
+    send=extend_schema(request=None, responses={200: QuotationSerializer}),
+    accept=extend_schema(request=None, responses={200: QuotationSerializer}),
+    reject=extend_schema(request=NoteSerializer, responses={200: QuotationSerializer}),
+)
 class QuotationViewSet(SalesViewSet):
     """Draft and sent quotations are edited freely; send, accept and reject
     are actions. Only a draft can be deleted."""
@@ -107,6 +128,14 @@ class QuotationViewSet(SalesViewSet):
         return self._detail(reject_quote(self.get_object(), body.validated_data["note"]))
 
 
+@extend_schema_view(
+    list=extend_schema(parameters=list_filters(
+        "HELD", "COMPLETED", "VOID",
+        extra=[query("seller", int, "Seller (user) id."), query("quotation", int, "Quotation id."), SEARCH],
+    )),
+    complete=extend_schema(request=CompleteSerializer, responses={200: InvoiceSerializer}),
+    void=extend_schema(request=ReasonSerializer, responses={200: InvoiceSerializer}),
+)
 class InvoiceViewSet(SalesViewSet):
     """POST makes a held sale (no number, no stock). PATCH edits it while
     held; DELETE cancels it. /complete/ finishes the sale; /void/ cancels a
@@ -159,6 +188,10 @@ class InvoiceViewSet(SalesViewSet):
         return self._detail(void_invoice(invoice, request.user, body.validated_data["reason"]))
 
 
+@extend_schema_view(
+    list=extend_schema(parameters=list_filters("POSTED", "VOID")),
+    void=extend_schema(request=ReasonSerializer, responses={200: CustomerPaymentSerializer}),
+)
 class PaymentViewSet(AuditMixin, DateRangeMixin, mixins.CreateModelMixin, mixins.ListModelMixin,
                      mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     """A payment is applied in full when it is saved, and frozen after.
@@ -203,6 +236,10 @@ class PaymentViewSet(AuditMixin, DateRangeMixin, mixins.CreateModelMixin, mixins
         return Response(CustomerPaymentSerializer(obj, context=self.get_serializer_context()).data)
 
 
+@extend_schema_view(
+    list=extend_schema(parameters=list_filters("DRAFT", "POSTED", extra=[query("invoice", int, "Invoice id.")])),
+    post_return=extend_schema(request=None, responses={200: SalesReturnSerializer}),
+)
 class ReturnViewSet(SalesViewSet):
     queryset = SalesReturn.objects.select_related("invoice", "customer").prefetch_related(
         Prefetch("lines", ReturnLine.objects.select_related("invoice_line__product"))
@@ -235,32 +272,33 @@ class CustomerAccountView(APIView):
     read_scope = "sell"
     write_scope = "sell"
 
+    @extend_schema(responses={200: CustomerAccountSerializer})
     def get(self, request, pk):
         customer = get_object_or_404(Customer, pk=pk)
         today = timezone.localdate()
         owed = customer_balance(customer)
-        room = max(customer.credit_limit - owed, 0) if customer.allow_credit else 0
-        return Response({
+        room = max(customer.credit_limit - owed, ZERO) if customer.allow_credit else ZERO
+        return Response(CustomerAccountSerializer({
             "customer": customer.pk,
             "code": customer.code,
             "name": customer.name,
             "credit_status": customer.credit_status,
-            "credit_limit": str(customer.credit_limit),
+            "credit_limit": customer.credit_limit,
             "payment_terms_days": customer.payment_terms_days,
-            "balance": str(owed),
-            "room_left": str(room),
+            "balance": owed,
+            "room_left": room,
             "open_invoices": [
                 {
                     "id": inv.pk,
                     "number": inv.number,
                     "sale_date": inv.sale_date,
                     "due_date": inv.due_date,
-                    "on_credit": str(inv.on_credit),
-                    "paid": str(inv.paid),
-                    "credited": str(inv.credited),
-                    "balance": str(inv.balance),
+                    "on_credit": inv.on_credit,
+                    "paid": inv.paid,
+                    "credited": inv.credited,
+                    "balance": inv.balance,
                     "overdue": bool(inv.due_date and inv.due_date < today),
                 }
                 for inv in open_invoices(customer)
             ],
-        })
+        }).data)

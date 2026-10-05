@@ -1,25 +1,31 @@
-# v1.0.0
+# v1.0.1
 from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from company.currency import usd_to_khr
 from core.exceptions import PostedDocumentError
+from core.schema import money
 from sales.models import (
+    Currency,
     CustomerPayment,
     Invoice,
     InvoiceLine,
+    InvoiceStatus,
     InvoiceTender,
     PaymentAllocation,
+    PaymentStatus,
     Quotation,
     QuotationLine,
     QuoteStatus,
     ReturnLine,
+    ReturnStatus,
     SalesReturn,
 )
-from sales.money import CASH, CREDIT, KHQR
+from sales.money import TENDER_KINDS
 from sales.services import returnable
 from users.scopes import has_scope
 
@@ -98,6 +104,7 @@ class QuotationSerializer(LinesMixin, serializers.ModelSerializer):
     line_parent = "quotation"
 
     customer_name = serializers.CharField(source="customer.name", read_only=True)
+    status = serializers.ChoiceField(choices=QuoteStatus.choices, read_only=True)
     is_expired = serializers.BooleanField(read_only=True)
     total = serializers.SerializerMethodField()
     invoiced_total = serializers.SerializerMethodField()
@@ -116,14 +123,19 @@ class QuotationSerializer(LinesMixin, serializers.ModelSerializer):
         read_only_fields = ["id", "number", "price_tier", "status", "accepted_at"]
         extra_kwargs = {"valid_until": {"required": False}}
 
+    @extend_schema_field(money())
     def get_total(self, obj):
         return str(sum((l.line_total for l in obj.lines.all()), Decimal("0.00")))
 
+    @extend_schema_field(money())
     def get_invoiced_total(self, obj):
-        return str(sum((l.net_price * l.qty_invoiced for l in obj.lines.all()), Decimal("0.00")))
+        total = sum((l.net_price * l.qty_invoiced for l in obj.lines.all()), Decimal("0.00"))
+        return str(total.quantize(Decimal("0.01")))
 
+    @extend_schema_field(money())
     def get_remaining_total(self, obj):
-        return str(sum((l.net_price * l.remaining for l in obj.lines.all()), Decimal("0.00")))
+        total = sum((l.net_price * l.remaining for l in obj.lines.all()), Decimal("0.00"))
+        return str(total.quantize(Decimal("0.01")))
 
     def validate_customer(self, customer):
         if self.instance and customer != self.instance.customer:
@@ -165,8 +177,11 @@ class InvoiceLineSerializer(PricedLineSerializer):
         fields = PRICED_LINE_FIELDS + ["quote_line", "unit_cost", "qty_returned"]
         extra_kwargs = {"product": {"required": False}}
 
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))
     def get_qty_returned(self, line):
-        return str(line.quantity - returnable(line)) if line.invoice.status == "COMPLETED" else "0"
+        if line.invoice.status != "COMPLETED":
+            return "0.00"
+        return str(line.quantity - returnable(line))
 
     def validate(self, attrs):
         quote_line = attrs.get("quote_line")
@@ -183,7 +198,8 @@ class InvoiceLineSerializer(PricedLineSerializer):
     def to_representation(self, line):
         data = super().to_representation(line)
         if not _can_see_cost(self):
-            data.pop("unit_cost", None)
+            # Null rather than left out, so the generated client's types stay true.
+            data["unit_cost"] = None
         return data
 
 
@@ -200,11 +216,14 @@ class InvoiceSerializer(LinesMixin, serializers.ModelSerializer):
     reprice_on_update = True  # a new customer may mean a new price tier
 
     customer_name = serializers.CharField(source="customer.name", read_only=True)
+    status = serializers.ChoiceField(choices=InvoiceStatus.choices, read_only=True)
     quotation_number = serializers.CharField(source="quotation.number", read_only=True, default=None)
     seller_name = serializers.CharField(source="seller.full_name", read_only=True, default=None)
     voided_by_name = serializers.CharField(source="voided_by.full_name", read_only=True, default=None)
     held_total = serializers.SerializerMethodField()
     total_khr = serializers.SerializerMethodField()
+    cost_total = serializers.SerializerMethodField(help_text="Null unless the user may see cost.")
+    profit = serializers.SerializerMethodField(help_text="Null unless the user may see cost.")
     lines = InvoiceLineSerializer(many=True, required=False)
     tenders = InvoiceTenderSerializer(many=True, read_only=True)
 
@@ -216,18 +235,36 @@ class InvoiceSerializer(LinesMixin, serializers.ModelSerializer):
             "hold_label", "seller", "seller_name", "sale_date", "exchange_rate",
             "held_total", "total", "total_khr", "discount_total", "paid_now", "on_credit",
             "change_due", "change_usd", "change_khr", "rounding", "due_date",
+            "cost_total", "profit",
             "void_reason", "voided_at", "voided_by_name", "lines", "tenders",
         ]
         read_only_fields = ["id", "number", "status", "price_tier", "seller", "sale_date"]
 
+    @extend_schema_field(money())
     def get_held_total(self, obj):
         """What the sale comes to so far — `total` is stamped only on completion."""
         return str(sum((l.line_total for l in obj.lines.all()), Decimal("0.00")))
 
+    @extend_schema_field(serializers.DecimalField(max_digits=16, decimal_places=0, allow_null=True))
     def get_total_khr(self, obj):
         if obj.exchange_rate is None:
             return None
         return str(usd_to_khr(obj.total, obj.exchange_rate))
+
+    def _cost(self, obj):
+        if obj.status == "HELD" or not _can_see_cost(self):
+            return None
+        return obj.cost_total
+
+    @extend_schema_field(money(allow_null=True))
+    def get_cost_total(self, obj):
+        cost = self._cost(obj)
+        return None if cost is None else str(cost.quantize(Decimal("0.01")))
+
+    @extend_schema_field(money(allow_null=True))
+    def get_profit(self, obj):
+        cost = self._cost(obj)
+        return None if cost is None else str((obj.total - cost).quantize(Decimal("0.01")))
 
     def validate_customer(self, customer):
         if not customer.is_active:
@@ -272,18 +309,10 @@ class InvoiceSerializer(LinesMixin, serializers.ModelSerializer):
             instance.price_tier = validated["customer"].price_tier
         return super().update(instance, validated)
 
-    def to_representation(self, invoice):
-        data = super().to_representation(invoice)
-        if _can_see_cost(self) and invoice.status != "HELD":
-            cost = invoice.cost_total
-            data["cost_total"] = str(cost.quantize(Decimal("0.01")))
-            data["profit"] = str((invoice.total - cost).quantize(Decimal("0.01")))
-        return data
-
 
 class TenderInputSerializer(serializers.Serializer):
-    kind = serializers.ChoiceField(choices=[CASH, KHQR, CREDIT])
-    currency = serializers.ChoiceField(choices=["USD", "KHR"], default="USD")
+    kind = serializers.ChoiceField(choices=TENDER_KINDS)
+    currency = serializers.ChoiceField(choices=Currency.choices, default=Currency.USD)
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     reference = serializers.CharField(required=False, allow_blank=True, default="")
 
@@ -312,6 +341,7 @@ class AllocationSerializer(serializers.ModelSerializer):
 
 class CustomerPaymentSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source="customer.name", read_only=True)
+    status = serializers.ChoiceField(choices=PaymentStatus.choices, read_only=True)
     taken_by_name = serializers.CharField(source="created_by.full_name", read_only=True, default=None)
     voided_by_name = serializers.CharField(source="voided_by.full_name", read_only=True, default=None)
     allocations = AllocationSerializer(many=True, required=False)
@@ -359,6 +389,7 @@ class SalesReturnSerializer(LinesMixin, serializers.ModelSerializer):
 
     invoice_number = serializers.CharField(source="invoice.number", read_only=True)
     customer_name = serializers.CharField(source="customer.name", read_only=True)
+    status = serializers.ChoiceField(choices=ReturnStatus.choices, read_only=True)
     draft_total = serializers.SerializerMethodField()
     lines = ReturnLineSerializer(many=True, required=False)
 
@@ -371,6 +402,7 @@ class SalesReturnSerializer(LinesMixin, serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "number", "customer", "status"]
 
+    @extend_schema_field(money())
     def get_draft_total(self, obj):
         return str(sum((l.line_total for l in obj.lines.all()), Decimal("0.00")))
 
@@ -403,3 +435,31 @@ class SalesReturnSerializer(LinesMixin, serializers.ModelSerializer):
         if not instance.is_draft_in_db():
             raise PostedDocumentError()
         return super().update(instance, validated)
+
+
+# --- customer account --------------------------------------------------------------
+
+class OpenInvoiceSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    number = serializers.CharField()
+    sale_date = serializers.DateTimeField()
+    due_date = serializers.DateField(allow_null=True)
+    on_credit = money()
+    paid = money()
+    credited = money()
+    balance = money()
+    overdue = serializers.BooleanField()
+
+
+class CustomerAccountSerializer(serializers.Serializer):
+    """What a customer owes, worked out now — never stored."""
+
+    customer = serializers.IntegerField()
+    code = serializers.CharField()
+    name = serializers.CharField()
+    credit_status = serializers.ChoiceField(choices=["NO", "YES", "HOLD"])
+    credit_limit = money()
+    payment_terms_days = serializers.IntegerField()
+    balance = money()
+    room_left = money()
+    open_invoices = OpenInvoiceSerializer(many=True)

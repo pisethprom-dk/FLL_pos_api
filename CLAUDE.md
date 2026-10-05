@@ -1,4 +1,4 @@
-<!-- v1.3.1 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
+<!-- v1.3.2 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
 
 # POS — tool shop, single outlet
 
@@ -85,7 +85,7 @@ container but `docker compose logs web` keeps its output.
 | 5 | `sales` | Done — quotation, invoice (held/complete), void, customer payment, return, balances |
 | 6 | `reports` | **Next** — read-only endpoints |
 
-190 tests passing.
+191 tests passing.
 
 **Inventory must come before sales.** A sale decrements stock and stamps a
 cost; both live in the movement ledger. Building sales first means writing the
@@ -243,10 +243,27 @@ with credentials are a harder problem than it looks.
   browser sees one origin, as nginx gives in production. No CORS needed.
 - Screens: the mockup's own CSS ported as the app stylesheet, with Angular CDK
   for behaviour only (dialogs, overlays, tables, keyboard access).
-- API client: generated from `/api/schema/`. The schema must be clean first —
-  it currently has 8 errors (APIViews with no serializer: login, refresh,
-  logout, me, password, customer account, company profile, current rate) and
-  16 warnings (untyped `SerializerMethodField`s, a `currency` enum collision).
+- API client: generated from `/api/schema/` (drf-spectacular, request and
+  response models split). The schema has **0 errors and 0 warnings**, and
+  `core/tests.py` fails the suite the moment it gets one.
+
+### Keeping the schema clean (every new endpoint)
+
+The schema is the contract the Angular client is generated from; anything it
+cannot see becomes `any` or a wrong type there.
+
+- An `APIView` or a hand-built body: `@extend_schema(request=..., responses=...)`,
+  and render the body through a serializer so schema and output cannot differ.
+- A `@action`: declare its request and response — by default the schema
+  assumes it takes and returns the action's `serializer_class`.
+- A `SerializerMethodField`: `@extend_schema_field(...)`. Money is
+  `core.schema.money()` — a decimal string, never a float.
+- A filter read from `query_params`: list it with `extend_schema_view(list=...)`
+  using the helpers in `core/schema.py`.
+- A field some users may not see (cost for a Seller, expected quantity while
+  counting) is sent as **null, never left out**, so the generated type is true.
+- A read-only status needs an explicit `ChoiceField(read_only=True)`; a new
+  enum whose name collides goes in `ENUM_NAME_OVERRIDES`.
 
 ### Roles
 
@@ -277,7 +294,8 @@ those are service-layer rules.
 
 ```
 config/       settings, urls
-core/         abstract models (TimeStampedModel, ActivatableModel), domain exceptions
+core/         abstract models (TimeStampedModel, ActivatableModel), domain exceptions,
+              view mixins, schema.py (OpenAPI helpers)
 users/        custom user, JWT cookie auth, scopes, permissions
 company/      profile (singleton), exchange rates, document counters, payment notes,
               currency.py (rules in code), services.py (rate_on, next_document_number)

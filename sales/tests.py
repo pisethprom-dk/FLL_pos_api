@@ -1,4 +1,4 @@
-# v1.0.0 — the sales rules that matter
+# v1.0.1 — the sales rules that matter
 from datetime import timedelta
 from decimal import Decimal as D
 from io import StringIO
@@ -276,8 +276,9 @@ class InvoiceTests(SalesTestCase):
         invoice = self.sell(self.walk_in, (self.drill, "1"))
         self.as_seller()
         res = self.client.get(f"/api/sales/invoices/{invoice.pk}/")
-        self.assertNotIn("unit_cost", res.data["lines"][0])
-        self.assertNotIn("profit", res.data)
+        self.assertIsNone(res.data["lines"][0]["unit_cost"])
+        self.assertIsNone(res.data["cost_total"])
+        self.assertIsNone(res.data["profit"])
         self.as_admin()
         res = self.client.get(f"/api/sales/invoices/{invoice.pk}/")
         self.assertEqual((res.data["lines"][0]["unit_cost"], res.data["profit"]), ("52.4000", "25.60"))

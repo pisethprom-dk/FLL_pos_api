@@ -118,14 +118,15 @@ run it on a bare machine, add a settings override that points at sqlite:
 
     python manage.py test --settings=test_settings_local
 
-190 tests cover login, cookie flags, rotation and replay, the absolute cap,
+191 tests cover login, cookie flags, rotation and replay, the absolute cap,
 scopes per role, the void window, user creation, riel rounding, historical
 rate lookup, document numbering, the singleton profile, category depth, the
 catalogue read-only rules, the walk-in guards, customer credit rules, partner
 code numbering, product–supplier links, the demo catalogue loader, the moving average,
 posting and reversal, blind counts, opening balances, the import, the discount cap, riel change
 and rounding, credit limits, quote-to-invoice, voids, payments, returns, plus smoke
-checks for Django system errors and missing migrations.
+checks for Django system errors, missing migrations, and a clean OpenAPI
+schema (zero warnings — the Angular client is generated from it).
 
 
 ## Company

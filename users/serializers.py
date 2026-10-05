@@ -1,5 +1,6 @@
-# v1.0.1
+# v1.0.2
 from django.contrib.auth import authenticate, password_validation
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from users.models import User
@@ -57,8 +58,30 @@ class MeSerializer(serializers.ModelSerializer):
             "role", "must_change_password", "scopes",
         ]
 
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_scopes(self, obj):
         return scopes_for(obj)
+
+
+class SessionSerializer(serializers.Serializer):
+    """What login and refresh return. The refresh token itself is never in a
+    body — it rides in the httpOnly cookie."""
+
+    access = serializers.CharField()
+    user = MeSerializer()
+
+
+class InitialPasswordSerializer(serializers.Serializer):
+    """Shown once so the Admin can pass it on; never stored in clear."""
+
+    initial_password = serializers.CharField()
+
+
+class UserCreatedSerializer(UserSerializer):
+    initial_password = serializers.CharField(read_only=True)
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ["initial_password"]
 
 
 class LoginSerializer(serializers.Serializer):

@@ -1,4 +1,6 @@
-# v1.0.3
+# v1.0.4
+from decimal import Decimal
+
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
@@ -75,7 +77,7 @@ class ExchangeRate(TimeStampedModel):
     rate = models.DecimalField(
         max_digits=18,
         decimal_places=6,
-        validators=[MinValueValidator(0.000001)],
+        validators=[MinValueValidator(Decimal("0.000001"))],
         help_text="Riel per one US dollar.",
     )
     note = models.CharField(max_length=250, blank=True)

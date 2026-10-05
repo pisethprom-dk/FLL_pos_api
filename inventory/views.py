@@ -1,10 +1,20 @@
-# v1.0.0 — /api/inventory/. The whole stock area is Admin only, via scopes.
+# v1.0.1 — /api/inventory/. The whole stock area is Admin only, via scopes.
 from django.db.models import Prefetch, Q
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
+from core.schema import (
+    DATE_FROM,
+    DATE_TO,
+    PRODUCT,
+    SEARCH,
+    SUPPLIER,
+    query,
+    status_filter,
+)
 from core.views import AuditMixin
 from inventory.imports import import_lines
 from inventory.models import (
@@ -18,6 +28,7 @@ from inventory.models import (
 )
 from inventory.serializers import (
     AdjustmentSerializer,
+    ImportResultSerializer,
     ImportSerializer,
     RecordCountsSerializer,
     ReverseSerializer,
@@ -33,6 +44,28 @@ from inventory.services import (
     reverse_document,
 )
 from users.permissions import HasReadWriteScope
+
+
+DOCUMENT_FILTERS = [status_filter("DRAFT", "POSTED"), DATE_FROM, DATE_TO, SEARCH]
+
+
+def document_schema(serializer, extra_filters=(), importable=True, counts=False):
+    """Schema for a stock document viewset: its filters, and what each action
+    takes and returns. The actions live on DocumentViewSet, but each subclass
+    returns its own document."""
+    actions = {
+        "list": extend_schema(parameters=DOCUMENT_FILTERS + list(extra_filters)),
+        "post_document": extend_schema(request=None, responses={200: serializer}),
+        "reverse": extend_schema(request=ReverseSerializer, responses={201: serializer}),
+    }
+    if importable:
+        actions["import_file"] = extend_schema(
+            request={"multipart/form-data": ImportSerializer},
+            responses={200: ImportResultSerializer},
+        )
+    if counts:
+        actions["record"] = extend_schema(request=RecordCountsSerializer, responses={200: serializer})
+    return extend_schema_view(**actions)
 
 
 class StockAccess:
@@ -103,9 +136,10 @@ class ImportMixin:
             replace=body.validated_data["replace"],
             commit=body.validated_data["commit"],
         )
-        return Response(result)
+        return Response(ImportResultSerializer(result).data)
 
 
+@document_schema(StockInSerializer, [SUPPLIER])
 class StockInViewSet(ImportMixin, DocumentViewSet):
     queryset = StockIn.objects.select_related("supplier").prefetch_related(
         Prefetch("lines", StockInLine.objects.select_related("product__unit", "pack_unit"))
@@ -120,6 +154,13 @@ class StockInViewSet(ImportMixin, DocumentViewSet):
         return qs
 
 
+@document_schema(AdjustmentSerializer, [
+    SUPPLIER,
+    query("reason", str, "Adjustment reason.", enum=[
+        "DAMAGE", "LOSS", "SHOP_USE", "WARRANTY_REPLACEMENT", "RETURN_TO_SUPPLIER",
+        "SUPPLIER_REPLACEMENT", "OPENING_BALANCE",
+    ]),
+])
 class AdjustmentViewSet(ImportMixin, DocumentViewSet):
     queryset = Adjustment.objects.select_related("supplier").prefetch_related(
         Prefetch("lines", AdjustmentLine.objects.select_related("product"))
@@ -137,6 +178,9 @@ class AdjustmentViewSet(ImportMixin, DocumentViewSet):
         return qs
 
 
+@document_schema(
+    StockCountSerializer, [query("category", int, "Category id.")], importable=False, counts=True,
+)
 class StockCountViewSet(DocumentViewSet):
     """POST starts a count for a category. DELETE on a draft abandons it."""
 
@@ -165,6 +209,12 @@ class StockCountViewSet(DocumentViewSet):
         return self._detail(count)
 
 
+@extend_schema_view(list=extend_schema(parameters=[
+    PRODUCT, DATE_FROM, DATE_TO,
+    query("doc_type", str, "Source document type, e.g. STOCK_IN, ADJUSTMENT, COUNT, INVOICE, RETURN."),
+    query("doc_number", str, "Source document number, e.g. GRN-000312."),
+    query("reason", str, "Adjustment reason, or VOID for an invoice void."),
+]))
 class StockMovementViewSet(StockAccess, mixins.ListModelMixin, mixins.RetrieveModelMixin,
                            viewsets.GenericViewSet):
     """The ledger. Filter by product for a stock card."""

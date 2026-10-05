@@ -1,4 +1,4 @@
-# v1.0.0 — the inventory rules that matter
+# v1.0.1 — the inventory rules that matter
 import io
 from datetime import timedelta
 from decimal import Decimal as D
@@ -389,12 +389,12 @@ class InventoryApiTests(InventoryTestCase):
         self.assertEqual(res.status_code, 201, res.data)
         url = f"/api/inventory/counts/{res.data['id']}/"
         line = next(l for l in res.data["lines"] if l["product"] == self.spanner.pk)
-        self.assertNotIn("expected_qty", line)
+        self.assertIsNone(line["expected_qty"])
 
         res = self.client.post(url + "record/", {"lines": [{"line": line["id"], "counted_qty": "9"}]}, format="json")
         self.assertEqual(res.status_code, 200, res.data)
         self.assertEqual(res.data["lines_counted"], 1)
-        self.assertNotIn("expected_qty", res.data["lines"][0])
+        self.assertTrue(all(l["expected_qty"] is None and l["difference"] is None for l in res.data["lines"]))
 
         res = self.client.post(url + "post/")
         self.assertEqual(res.status_code, 200, res.data)

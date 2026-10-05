@@ -1,4 +1,5 @@
-# v1.0.0 — smoke checks that catch deployment problems before a container dies
+# v1.0.1 — smoke checks that catch deployment problems before a container dies
+import os
 from io import StringIO
 
 from django.core.management import call_command
@@ -37,3 +38,15 @@ class SystemCheckTests(TestCase):
             call_command("makemigrations", "--check", "--dry-run", stdout=out, stderr=out)
         except SystemExit:
             self.fail(f"Models have changed without a migration:\n{out.getvalue()}")
+
+    def test_the_api_schema_has_no_errors_or_warnings(self):
+        """The Angular client is generated from this schema. Every warning here
+        is an `any`, or a wrong type, in the generated code."""
+        out = StringIO()
+        try:
+            call_command(
+                "spectacular", "--fail-on-warn", "--file", os.devnull,
+                stdout=out, stderr=out,
+            )
+        except (SystemExit, Exception) as exc:
+            self.fail(f"The OpenAPI schema has warnings ({exc}):\n{out.getvalue()}")

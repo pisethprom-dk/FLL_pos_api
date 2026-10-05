@@ -1,4 +1,4 @@
-# v1.0.0
+# v1.0.1
 import copy
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -33,8 +33,11 @@ class ModelCleanMixin:
         return attrs
 
 
+CREDIT_STATUS = ["NO", "YES", "HOLD"]
+
+
 class CustomerSerializer(ModelCleanMixin, serializers.ModelSerializer):
-    credit_status = serializers.CharField(read_only=True)
+    credit_status = serializers.ChoiceField(choices=CREDIT_STATUS, read_only=True)
 
     class Meta:
         model = Customer
@@ -51,7 +54,7 @@ class CustomerSerializer(ModelCleanMixin, serializers.ModelSerializer):
 class CustomerLookupSerializer(serializers.ModelSerializer):
     """Small payload for the till's Choose customer dialog."""
 
-    credit_status = serializers.CharField(read_only=True)
+    credit_status = serializers.ChoiceField(choices=CREDIT_STATUS, read_only=True)
 
     class Meta:
         model = Customer

@@ -1,5 +1,6 @@
-# v1.0.2
+# v1.0.3
 from django.db.models import F, Q
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -12,10 +13,23 @@ from catalogue.serializers import (
     ProductSerializer,
     UnitSerializer,
 )
+from core.schema import ACTIVE, SEARCH, flag, query
 from core.views import ActiveFilterMixin
 from users.permissions import IsAdminOrReadOnly
 
 
+PRODUCT_FILTERS = [
+    ACTIVE, SEARCH,
+    query("category", int, "Category id; a top-level one includes its sub-categories."),
+    query("brand", int, "Brand id."),
+    flag("below_reorder", "At or below the reorder level."),
+    flag("out_of_stock", "Nothing on hand."),
+]
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    ACTIVE, flag("top_level", "Top-level categories only."), query("parent", int, "Parent category id."),
+]))
 class CategoryViewSet(ActiveFilterMixin, viewsets.ModelViewSet):
     queryset = Category.objects.select_related("parent").all()
     serializer_class = CategorySerializer
@@ -38,6 +52,7 @@ class CategoryViewSet(ActiveFilterMixin, viewsets.ModelViewSet):
         serializer.save(updated_by=self.request.user)
 
 
+@extend_schema_view(list=extend_schema(parameters=[ACTIVE]))
 class BrandViewSet(ActiveFilterMixin, viewsets.ModelViewSet):
     queryset = Brand.objects.all()
     serializer_class = BrandSerializer
@@ -51,6 +66,7 @@ class BrandViewSet(ActiveFilterMixin, viewsets.ModelViewSet):
         serializer.save(updated_by=self.request.user)
 
 
+@extend_schema_view(list=extend_schema(parameters=[ACTIVE]))
 class UnitViewSet(ActiveFilterMixin, viewsets.ModelViewSet):
     queryset = Unit.objects.all()
     serializer_class = UnitSerializer
@@ -58,6 +74,7 @@ class UnitViewSet(ActiveFilterMixin, viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "head", "options"]
 
 
+@extend_schema_view(list=extend_schema(parameters=PRODUCT_FILTERS))
 class ProductViewSet(ActiveFilterMixin, viewsets.ModelViewSet):
     queryset = Product.objects.select_related("category", "category__parent", "brand", "unit")
     serializer_class = ProductSerializer
@@ -90,7 +107,8 @@ class ProductViewSet(ActiveFilterMixin, viewsets.ModelViewSet):
             )
         return qs
 
-    @action(detail=False, methods=["get"])
+    @extend_schema(parameters=PRODUCT_FILTERS, responses={200: ProductLookupSerializer(many=True)})
+    @action(detail=False, methods=["get"], pagination_class=None)
     def lookup(self, request):
         """Small payload for the till and stock line pickers."""
         qs = self.filter_queryset(self.get_queryset()).filter(is_active=True)[:50]
