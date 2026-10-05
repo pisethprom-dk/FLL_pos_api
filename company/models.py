@@ -1,9 +1,10 @@
-# v1.0.4
+# v1.0.5
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 from core.models import ActivatableModel, TimeStampedModel
 
@@ -115,16 +116,28 @@ class DocumentCounter(models.Model):
     """Next number per document type, and for customer and supplier codes.
 
     The prefix lives here rather than on the company profile, so the Rules and
-    numbering screen edits these rows directly. Padding is fixed at six digits.
+    numbering screen edits these rows directly.
+
+    Quotations and invoices are numbered by day: prefix, the date as YYYYMMDD,
+    then a running number that starts again at 001 each day — INV-20261005001
+    (owner's decision). Every other type runs on, padded to six digits —
+    PAY-000147. Which types are daily is fixed here in code, not a setting.
     """
+
+    DAILY = (DocumentType.QUOTATION, DocumentType.INVOICE)
+    PADDING = 6
+    # Three digits, growing to four past 999 in a day rather than refusing a sale.
+    DAILY_PADDING = 3
 
     doc_type = models.CharField(
         max_length=20, choices=DocumentType.choices, unique=True
     )
     prefix = models.CharField(max_length=10)
     next_number = models.PositiveIntegerField(default=1)
-
-    PADDING = 6
+    number_date = models.DateField(
+        null=True, blank=True, editable=False,
+        help_text="The day next_number counts for. Daily types only.",
+    )
 
     class Meta:
         ordering = ["doc_type"]
@@ -132,8 +145,18 @@ class DocumentCounter(models.Model):
     def __str__(self):
         return f"{self.doc_type} → {self.peek()}"
 
-    def peek(self):
-        return f"{self.prefix}{self.next_number:0{self.PADDING}d}"
+    @property
+    def is_daily(self):
+        return self.doc_type in self.DAILY
+
+    def peek(self, on=None):
+        """The number the next document would take, without taking it. On a
+        new day a daily type shows 001, whatever yesterday reached."""
+        if not self.is_daily:
+            return f"{self.prefix}{self.next_number:0{self.PADDING}d}"
+        on = on or timezone.localdate()
+        running = self.next_number if self.number_date == on else 1
+        return f"{self.prefix}{on:%Y%m%d}{running:0{self.DAILY_PADDING}d}"
 
 
 class PaymentNote(TimeStampedModel, ActivatableModel):

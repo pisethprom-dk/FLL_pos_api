@@ -118,7 +118,7 @@ run it on a bare machine, add a settings override that points at sqlite:
 
     python manage.py test --settings=test_settings_local
 
-191 tests cover login, cookie flags, rotation and replay, the absolute cap,
+202 tests cover login, cookie flags, rotation and replay, the absolute cap,
 scopes per role, the void window, user creation, riel rounding, historical
 rate lookup, document numbering, the singleton profile, category depth, the
 catalogue read-only rules, the walk-in guards, customer credit rules, partner
@@ -145,8 +145,12 @@ it afterwards.
 `next_document_number()` takes the number and advances the counter under
 `select_for_update()`, so two concurrent sales cannot grab the same invoice
 number. Call it inside the transaction that saves the document. Prefixes live
-on the counter rows, which is what the Rules and numbering screen edits;
-padding is fixed at six digits.
+on the counter rows, which is what the Rules and numbering screen edits.
+
+Quotations and invoices are numbered by day: prefix, date, then a running
+number that starts again at 001 each day — `INV-20261005001`. Past 999 in a
+day it carries on to four digits. Every other document runs on with six
+digits — `PAY-000147`.
 
 `GET /api/company/rate/` gives the till everything it needs in one call:
 today's rate, decimals, rounding step, symbols and note denominations.
@@ -198,7 +202,8 @@ the serializer and database constraints each refuse it.
 Price tier and credit are independent. Credit off clears the limit, terms and
 hold on save; credit on needs a limit above zero.
 
-A blank code is numbered from the company counters with six digits —
+A blank code is numbered from the company counters with six digits, like the
+non-daily documents —
 `CUS-000001`, `SUP-000001`. A code typed by hand is kept and skipped later.
 
 `ProductSupplier` records which supplier carries which product: their own SKU,

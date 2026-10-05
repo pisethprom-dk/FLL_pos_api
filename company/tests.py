@@ -1,6 +1,7 @@
-# v1.0.0 — the company rules that matter
+# v1.0.3 — the company rules that matter
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.urls import reverse
@@ -78,22 +79,65 @@ class ExchangeRateTests(TestCase):
             )
 
 
+def on_day(day):
+    """Run as if the shop's date were `day`."""
+    return patch("django.utils.timezone.localdate", return_value=day)
+
+
 class DocumentNumberTests(TestCase):
+    OCT_5 = date(2026, 10, 5)
+
     def setUp(self):
         DocumentCounter.objects.create(
-            doc_type=DocumentType.INVOICE, prefix="INV-", next_number=147
+            doc_type=DocumentType.PAYMENT, prefix="PAY-", next_number=147
         )
+        DocumentCounter.objects.create(doc_type=DocumentType.INVOICE, prefix="INV-")
+        DocumentCounter.objects.create(doc_type=DocumentType.QUOTATION, prefix="QUO-")
 
-    def test_numbers_are_padded_and_advance(self):
-        self.assertEqual(next_document_number(DocumentType.INVOICE), "INV-000147")
-        self.assertEqual(next_document_number(DocumentType.INVOICE), "INV-000148")
-        counter = DocumentCounter.objects.get(doc_type=DocumentType.INVOICE)
+    def test_most_documents_run_on_padded_to_six(self):
+        self.assertEqual(next_document_number(DocumentType.PAYMENT), "PAY-000147")
+        self.assertEqual(next_document_number(DocumentType.PAYMENT), "PAY-000148")
+        counter = DocumentCounter.objects.get(doc_type=DocumentType.PAYMENT)
         self.assertEqual(counter.next_number, 149)
 
     def test_peek_does_not_advance(self):
+        counter = DocumentCounter.objects.get(doc_type=DocumentType.PAYMENT)
+        self.assertEqual(counter.peek(), "PAY-000147")
+        self.assertEqual(counter.peek(), "PAY-000147")
+
+    def test_invoices_and_quotations_are_numbered_by_day(self):
+        with on_day(self.OCT_5):
+            self.assertEqual(next_document_number(DocumentType.INVOICE), "INV-20261005001")
+            self.assertEqual(next_document_number(DocumentType.INVOICE), "INV-20261005002")
+            # Each type keeps its own count.
+            self.assertEqual(next_document_number(DocumentType.QUOTATION), "QUO-20261005001")
+
+    def test_the_count_starts_again_each_day(self):
+        with on_day(self.OCT_5):
+            next_document_number(DocumentType.INVOICE)
+            next_document_number(DocumentType.INVOICE)
+        with on_day(self.OCT_5 + timedelta(days=1)):
+            self.assertEqual(next_document_number(DocumentType.INVOICE), "INV-20261006001")
+
+    def test_peek_shows_001_on_a_new_day(self):
+        with on_day(self.OCT_5):
+            next_document_number(DocumentType.INVOICE)
         counter = DocumentCounter.objects.get(doc_type=DocumentType.INVOICE)
-        self.assertEqual(counter.peek(), "INV-000147")
-        self.assertEqual(counter.peek(), "INV-000147")
+        self.assertEqual(counter.peek(self.OCT_5), "INV-20261005002")
+        self.assertEqual(counter.peek(self.OCT_5 + timedelta(days=1)), "INV-20261006001")
+
+    def test_past_999_in_a_day_grows_to_four_digits(self):
+        DocumentCounter.objects.filter(doc_type=DocumentType.INVOICE).update(
+            number_date=self.OCT_5, next_number=999
+        )
+        with on_day(self.OCT_5):
+            self.assertEqual(next_document_number(DocumentType.INVOICE), "INV-20261005999")
+            self.assertEqual(next_document_number(DocumentType.INVOICE), "INV-202610051000")
+
+    def test_the_prefix_is_still_the_admins(self):
+        DocumentCounter.objects.filter(doc_type=DocumentType.INVOICE).update(prefix="FLL-")
+        with on_day(self.OCT_5):
+            self.assertEqual(next_document_number(DocumentType.INVOICE), "FLL-20261005001")
 
 
 class CompanyProfileTests(TestCase):
@@ -110,6 +154,39 @@ class CompanyProfileTests(TestCase):
 
         with self.assertRaises(ValidationError):
             CompanyProfile.get().delete()
+
+
+class CompanyBrandTests(TestCase):
+    """The sign-in page shows the shop before anyone has signed in."""
+
+    def setUp(self):
+        self.client = APIClient()
+        profile = CompanyProfile.get()
+        profile.name = "FLL"
+        profile.name_kh = "ហាងលក់ឧបករណ៍ជាង"
+        profile.address = "Street 315, Toul Kork, Phnom Penh"
+        profile.vat_tin = "K001-901234567"
+        profile.phone = "012 345 678"
+        profile.save()
+
+    def test_anyone_may_read_the_brand(self):
+        res = self.client.get("/api/company/brand/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["name"], "FLL")
+        self.assertEqual(res.data["name_kh"], "ហាងលក់ឧបករណ៍ជាង")
+
+    def test_it_shows_nothing_beyond_name_address_and_logo(self):
+        res = self.client.get("/api/company/brand/")
+        self.assertEqual(set(res.data), {"name", "name_kh", "address", "logo"})
+
+    def test_a_stale_token_does_not_break_it(self):
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer expired.or.forged")
+        self.assertEqual(self.client.get("/api/company/brand/").status_code, 200)
+
+    def test_it_cannot_be_written(self):
+        res = self.client.patch("/api/company/brand/", {"name": "Hacked"}, format="json")
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(CompanyProfile.get().name, "FLL")
 
 
 class CompanyApiTests(TestCase):
@@ -169,3 +246,22 @@ class CompanyApiTests(TestCase):
     def test_seller_cannot_see_numbering(self):
         self._as(self.seller, "counter-pass-99")
         self.assertEqual(self.client.get("/api/company/numbering/").status_code, 403)
+
+    def test_a_rate_nobody_set_sends_set_by_as_null(self):
+        # The rate from setUp, like seed's opening rate, has no created_by. The
+        # field is still sent — as null — never left out.
+        self._as(self.admin, "owner-pass-99")
+        row = self.client.get("/api/company/exchange-rates/").data["results"][0]
+        self.assertIn("set_by", row)
+        self.assertIsNone(row["set_by"])
+
+    def test_a_rate_set_by_a_user_names_them(self):
+        self._as(self.admin, "owner-pass-99")
+        later = date.today() + timedelta(days=30)
+        res = self.client.post(
+            "/api/company/exchange-rates/",
+            {"effective_date": later.isoformat(), "rate": "4150"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["set_by"], "Bopha Ly")

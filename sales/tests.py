@@ -1,4 +1,4 @@
-# v1.0.1 — the sales rules that matter
+# v1.0.2 — the sales rules that matter
 from datetime import timedelta
 from decimal import Decimal as D
 from io import StringIO
@@ -31,6 +31,11 @@ from sales.services import (
 from users.models import Role, User
 
 RATE = D("4100")
+
+
+def first_invoice_number():
+    """Invoices are numbered by day: INV-YYYYMMDD001 is today's first."""
+    return f"INV-{timezone.localdate():%Y%m%d}001"
 
 
 def T(kind, amount, currency="USD"):
@@ -221,7 +226,7 @@ class InvoiceTests(SalesTestCase):
 
     def test_completing_stamps_number_rate_cost_and_moves_stock(self):
         invoice = self.sell(self.walk_in, (self.drill, "2"), (self.grinder, "1", PERCENT, "5"))
-        self.assertEqual(invoice.number, "INV-000001")
+        self.assertEqual(invoice.number, first_invoice_number())
         self.assertEqual(invoice.status, "COMPLETED")
         self.assertEqual(invoice.exchange_rate, RATE)
         self.assertEqual(invoice.seller, self.seller)
@@ -238,7 +243,8 @@ class InvoiceTests(SalesTestCase):
         self.assertEqual(self.on_hand(self.drill), D("20"))
         invoice.refresh_from_db()
         self.assertEqual((invoice.status, invoice.number), ("HELD", None))
-        self.assertEqual(self.sell(self.walk_in, (self.drill, "1")).number, "INV-000001")
+        # The failed sale did not use up a number.
+        self.assertEqual(self.sell(self.walk_in, (self.drill, "1")).number, first_invoice_number())
 
     def test_the_api_refuses_a_discount_over_the_cap_or_on_a_fixed_price(self):
         self.as_seller()
@@ -394,9 +400,9 @@ class VoidTests(SalesTestCase):
         self.as_seller()
         res = self.client.post(self.void_url(invoice), {"reason": "Rung up twice"}, format="json")
         self.assertEqual(res.status_code, 200, res.data)
-        self.assertEqual((res.data["status"], res.data["number"]), ("VOID", "INV-000001"))
+        self.assertEqual((res.data["status"], res.data["number"]), ("VOID", first_invoice_number()))
         self.assertEqual(self.on_hand(self.drill), D("30"))
-        back = StockMovement.objects.filter(doc_number="INV-000001", is_reversal=True).get()
+        back = StockMovement.objects.filter(doc_number=first_invoice_number(), is_reversal=True).get()
         self.assertEqual(back.unit_cost, D("52.40"))  # at the cost it left at
 
     def test_a_seller_cannot_void_another_sellers_or_yesterdays_sale(self):

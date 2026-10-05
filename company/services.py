@@ -1,4 +1,4 @@
-# v1.0.0 — business rules for the company app.
+# v1.0.2 — business rules for the company app.
 #
 # These live here, not in views, so the same rule holds whether the call comes
 # from the API, the Django admin or a management command.
@@ -44,10 +44,11 @@ def convert_to_khr(usd_amount, on_date=None):
 
 
 def rate_is_in_use(rate):
-    """True once any document has been stamped with this rate.
+    """True once any invoice carries this rate: one with a sale date from the
+    rate's effective date up to the day before the next rate starts. A held
+    invoice has no sale date and no rate yet, so it does not count.
 
-    The sales app is not built yet, so this returns False until Invoice exists.
-    Wired here so the rule has one home when it does.
+    The ImportError guard only keeps the company app usable without sales.
     """
     try:
         from sales.models import Invoice  # noqa: F401
@@ -71,9 +72,20 @@ def next_document_number(doc_type):
 
     select_for_update is what stops two sales grabbing the same invoice number.
     Call this inside the same transaction that saves the document.
+
+    A daily type (quotation, invoice) starts again at 1 with the first number
+    of each day, by the shop's date — Asia/Phnom_Penh, not the server's UTC.
     """
     counter = DocumentCounter.objects.select_for_update().get(doc_type=doc_type)
-    number = counter.peek()
+    fields = ["next_number"]
+    today = None
+    if counter.is_daily:
+        today = timezone.localdate()
+        if counter.number_date != today:
+            counter.number_date = today
+            counter.next_number = 1
+            fields.append("number_date")
+    number = counter.peek(today)
     counter.next_number += 1
-    counter.save(update_fields=["next_number"])
+    counter.save(update_fields=fields)
     return number

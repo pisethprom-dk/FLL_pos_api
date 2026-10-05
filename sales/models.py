@@ -1,4 +1,4 @@
-# v1.0.1 — quotation, invoice, customer payment and return.
+# v1.0.2 — quotation, invoice, customer payment and return.
 #
 # Each document guards itself: once it leaves its editable state the model
 # refuses save() and delete(). State changes after that are made by
@@ -46,7 +46,8 @@ class NumberedDocument(TimeStampedModel):
 
     DOC_TYPE = None
 
-    number = models.CharField(max_length=20, unique=True, editable=False)
+    # Room for a daily number: a prefix of up to 10, YYYYMMDD, and 3–4 digits.
+    number = models.CharField(max_length=30, unique=True, editable=False)
 
     class Meta:
         abstract = True
@@ -215,7 +216,7 @@ class Invoice(TimeStampedModel):
     reads; sale_date is what company.services.rate_is_in_use filters on.
     """
 
-    number = models.CharField(max_length=20, unique=True, null=True, editable=False)
+    number = models.CharField(max_length=30, unique=True, null=True, editable=False)
     status = models.CharField(
         max_length=10, choices=InvoiceStatus.choices, default=InvoiceStatus.HELD,
         editable=False, db_index=True,

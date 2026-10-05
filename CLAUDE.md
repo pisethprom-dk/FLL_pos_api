@@ -1,4 +1,4 @@
-<!-- v1.3.3 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
+<!-- v1.3.5 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
 
 # POS — tool shop, single outlet
 
@@ -86,7 +86,7 @@ container but `docker compose logs web` keeps its output.
 | 5 | `sales` | Done — quotation, invoice (held/complete), void, customer payment, return, balances |
 | 6 | `reports` | **Next** — read-only endpoints |
 
-191 tests passing.
+202 tests passing.
 
 **Inventory must come before sales.** A sale decrements stock and stamps a
 cost; both live in the movement ledger. Building sales first means writing the
@@ -210,8 +210,17 @@ most one preferred per product — marking a new one unmarks the old. No price o
 it: what was paid lives on stock-in lines. Links carry no history, so they may
 be deleted; customers and suppliers may not.
 
-**Partner codes.** A blank code is numbered from `DocumentCounter` with the
-same fixed six digits as documents: `CUS-000001`, `SUP-000001`. A code typed by
+**Document numbers.** Quotations and invoices are numbered by day — prefix,
+date, running number that starts again at 001 each day: `QUO-20261005001`,
+`INV-20261005001` (owner's decision). Past 999 in a day it grows to four digits
+rather than refuse a sale. The date is the shop's (Asia/Phnom_Penh) on the day
+the number is taken: an invoice's on completion, a quotation's on creation —
+a back-dated quote keeps today's date in its number. Every other document runs
+on, six digits: `PAY-000147`, `RTN-…`, `GRN-…`, `ADJ-…`, `CNT-…`. Which types are
+daily is `DocumentCounter.DAILY`, in code; the prefix stays the Admin's.
+
+**Partner codes.** A blank code is numbered from `DocumentCounter` with six
+digits, like the non-daily documents: `CUS-000001`, `SUP-000001`. A code typed by
 hand is kept, and the counter skips past it. The walk-in is `CUS-000000`.
 
 **Warranty claims.** A tracking log, not a transaction. Seven fields: warranty
@@ -235,6 +244,11 @@ caps the whole session at 12 hours.
 
 Serve Angular and the API from one origin through nginx. Cross-origin cookies
 with credentials are a harder problem than it looks.
+
+**One public endpoint besides login and refresh:** `GET /api/company/brand/`
+returns the shop's name, Khmer name, address and logo for the sign-in page —
+what every receipt prints anyway, nothing more. It runs no authentication, so
+a stale token in the browser cannot turn it into a 401. It is read-only.
 
 ### Frontend (scaffolded in `../pos_frontend`)
 

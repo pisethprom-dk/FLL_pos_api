@@ -1,4 +1,4 @@
-# v1.0.0 — the stock movement ledger and the three stock documents.
+# v1.0.1 — the stock movement ledger and the three stock documents.
 #
 # Stock and cost move only when a document is posted (inventory/services.py).
 # A draft changes nothing; a posted document is frozen and corrected only by a
@@ -59,7 +59,7 @@ class StockMovement(models.Model):
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="movements")
     doc_type = models.CharField(max_length=20, choices=DocumentType.choices)
     doc_id = models.PositiveBigIntegerField()
-    doc_number = models.CharField(max_length=20, db_index=True)
+    doc_number = models.CharField(max_length=30, db_index=True)  # fits a daily invoice number
     line_id = models.PositiveBigIntegerField(null=True, blank=True)
     reason = models.CharField(max_length=25, blank=True, db_index=True)
     is_reversal = models.BooleanField(default=False)
