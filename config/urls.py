@@ -1,4 +1,4 @@
-# v1.0.5 — root URL configuration
+# v1.0.6 — root URL configuration
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
@@ -15,6 +15,7 @@ urlpatterns = [
     path("api/inventory/", include("inventory.urls")),
     path("api/sales/", include("sales.urls")),
     path("api/warranty/", include("warranty.urls")),
+    path("api/reports/", include("reports.urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="docs"),
 ]

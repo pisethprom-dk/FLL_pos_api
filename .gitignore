@@ -1,4 +1,4 @@
-# v1.0.0 — kept out of git
+# v1.0.1 — kept out of git
 # Secrets: .env holds the real SECRET_KEY and database password. .env.example is committed.
 .env
 # Python
@@ -11,6 +11,8 @@ media/
 staticfiles/
 test_settings_local.py
 *.log
+# Database dumps: real shop data
+backups/
 # Editors and macOS
 .idea/
 .DS_Store

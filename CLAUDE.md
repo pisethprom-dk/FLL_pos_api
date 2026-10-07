@@ -1,4 +1,4 @@
-<!-- v1.4.4 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
+<!-- v1.4.9 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
 # POS — tool shop, single outlet
 
 Back office for one hardware shop in Phnom Penh. Prices in US dollars, takes
@@ -69,6 +69,21 @@ exist; `--reset` clears the whole stock area first (documents, movements,
 stock and cost, GRN/ADJ/CNT numbers) and refuses once there are sales.
 Development only — never the live shop.
 
+`seed_sales_demo --admin <an Admin> --seller <a Seller>` adds sample selling
+on top of both (owner's request, 2026-10-07): two store customers, two
+quotations (one invoiced, one sent), two sales (one on credit, past due; one
+part credit), two voided, two held, two customer payments (one in riel), two
+returns (one credited, one refunded), two warranty claims, a payment note,
+and — where no rate is held five weeks back — a rate at the earliest held one.
+Each document posts through `sales/services.py` as of its own moment (the
+clock patched to that day in shop hours), so numbers, rates, due dates, stock
+movements and stamps are that day's; a daily number follows on from what its
+day already holds, and both daily counters are put back afterwards. A
+back-dated sale takes, per line, the first product not moved since its day,
+so the ledger stays in date order. Days count back from the run day. Refuses
+a second run; a completed sale cannot be deleted, so going back means
+restoring a dump (`backups/`, git-ignored). Development only.
+
 `recompute_stock` rebuilds `qty_on_hand` and `avg_cost` from the ledger;
 `--check` only reports, and exits non-zero on drift. After a change to
 `requirements.txt`, rebuild the image (`docker compose up -d --build`).
@@ -106,9 +121,9 @@ container but `docker compose logs web` keeps its output.
 | 4 | `inventory` | Done — movement ledger, stock-in, adjustment, count, reversal, CSV/Excel import |
 | 5 | `sales` | Done — quotation, invoice (held/complete), void, customer payment, return, balances |
 | — | `warranty` | Done — the warranty claims log (added 2026-10-06, with the frontend's step 5c-5) |
-| 6 | `reports` | **Next** — read-only endpoints |
+| 6 | `reports` | Done (2026-10-07): daily sales, stock on hand, receivables, the dashboard |
 
-227 tests passing.
+248 tests passing.
 
 **Inventory must come before sales.** A sale decrements stock and stamps a
 cost; both live in the movement ledger. Building sales first means writing the
@@ -355,7 +370,7 @@ inventory/    stock movement ledger, stock-in, adjustment, count, import,
 sales/        quotation, invoice, void, customer payment, return,
               money.py (discount cap, settling tenders), services.py (balances)
 warranty/     warranty claims log
-reports/      NEXT — read-only endpoints
+reports/      read-only report endpoints, worked out on every call (services.py)
 ```
 
 ---
@@ -496,11 +511,57 @@ serves the till and the payment screen.
 
 ---
 
-## Next slice — `reports`
+## Slice 6 — `reports`
 
-Read-only endpoints: daily sales (by day, seller, tender; Seller sees only
-their own), stock on hand, receivables aging. Profit reads the cost stamped on
-each sale line. Agree the design before building.
+Read-only endpoints, one at a time (owner's choice, 2026-10-07), each worked
+out on every call — nothing is stored.
+
+**Daily sales** (`GET /api/reports/daily-sales/`, `date_from`, `date_to`,
+`seller`; this month by default). Completed sales by the day they were sold
+(shop time zone); voided and held left out. Summary (sales, in riel at each
+sale's stamped rate, invoices, average, discount, cost/profit/margin,
+returns posted in the period), by day, by seller, by tender. Cash = total −
+KHQR − credit, so the three add up to sales. Cost is the cost stamped on each
+sale line. A Seller (`report.sales.own`) is always held to their own sales;
+cost, profit and margin are null without `cost.view`. `HasScope` takes a
+tuple of scopes: any one lets the user in.
+
+**Stock on hand** (`GET /api/reports/stock-on-hand/`, `status`, `category`,
+`brand`, `search`; `report.stock`, both roles). As at today. Products that
+track stock and are active, plus retired ones still holding stock. Status,
+the first that applies: OUT (nothing on hand), REORDER (at or below the
+reorder level), IDLE (holding stock, no movement for 90 days —
+`IDLE_DAYS`), OK. The summary covers all stock whatever the filters (value,
+below reorder, out, no movement and its value, the last posted count); the
+rows are the filtered ones, with their total. Average cost and value are
+null without `cost.view`.
+
+**Receivables** (`GET /api/reports/receivables/`, `show`: overdue,
+over_limit, on_hold; `report.receivables`, Admin only). As at today. Each
+open invoice's balance (`invoices_with_balance()`: on credit less posted
+payments and returns credited) goes into 0–30, 31–60, 61–90 or over 90 by the
+days since it was sold (owner's choice). One row per customer who owes:
+the four columns, owed, limit, room left (below zero when over), overdue
+(an invoice past its due date), over limit, on hold. Summary over everyone
+who owes: owed, in riel at today's rate, past 60 days and its share,
+collected this month (posted payments), who is over limit or on hold. A
+customer's invoices come from the account endpoint.
+
+**Dashboard** (`GET /api/reports/dashboard/`, anyone signed in). Today at a
+glance, each part `null` for whoever may not see it: `sales` (the report.sales
+scopes — a Seller's own: today's figures, the last 7 days oldest first with
+empty days as 0.00 and each day's share of the best for the bar, today by
+main category — a sub-category counts in its group — the four biggest then
+Other, the last 5 completed sales with Cash / KHQR / Credit / Mixed),
+`cash_today` (report.sales.all: cash kept from today's sales after change +
+cash payments posted today − cash refunds posted today; not a drawer count),
+`stock` (report.stock: the summary, up to 5 below reorder — out of stock
+first, then by code — and how many more), `owed` (report.receivables: the 5
+who owe most, totals over everyone, how many more), `held_sales` (sell,
+every till's), `quotations` (quotation.view: SENT, of those expiring within
+`EXPIRING_DAYS` = 7 or expired), `warranty` (warranty.view: open claims, of
+those out of warranty). Built from `daily_sales()`, `stock_on_hand()` and
+`receivables()`.
 
 ---
 

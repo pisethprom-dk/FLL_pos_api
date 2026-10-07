@@ -1,23 +1,36 @@
-# v1.0.5 — the sales rules that matter
-from datetime import timedelta
+# v1.0.6 — the sales rules that matter
+from datetime import date, datetime, timedelta
 from decimal import Decimal as D
 from io import StringIO
+from unittest import mock
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from catalogue.models import Category, Product, Unit
-from company.models import ExchangeRate
+from company.models import ExchangeRate, PaymentNote
 from company.services import rate_is_in_use
 from core.exceptions import CreditLimitError, DiscountLimitError, DomainError, InsufficientStockError
 from core.exceptions import PostedDocumentError
 from inventory.models import StockIn, StockInLine, StockMovement
 from inventory.services import post_stock_in
 from partners.models import Customer, PriceTier, Supplier, SupplierType
-from sales.models import Invoice, InvoiceLine, Quotation, QuotationLine, QuoteStatus, ReturnLine, SalesReturn
+from sales.models import (
+    CustomerPayment,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    PaymentStatus,
+    Quotation,
+    QuotationLine,
+    QuoteStatus,
+    ReturnLine,
+    SalesReturn,
+)
 from sales.money import AMOUNT, CASH, CREDIT, KHQR, PERCENT, Tender, net_price, settle
 from sales.services import (
     accept_quote,
@@ -29,6 +42,7 @@ from sales.services import (
     void_invoice,
 )
 from users.models import Role, User
+from warranty.models import WarrantyClaim
 
 RATE = D("4100")
 
@@ -594,3 +608,124 @@ class ScopeTests(SalesTestCase):
 
         self.assertTrue(has_scope(self.admin, "cost.view"))
         self.assertFalse(has_scope(self.seller, "cost.view"))
+
+
+class SeedSalesDemoTests(TestCase):
+    """The sample sales go through the real services, each as of its own day,
+    on top of the sample catalogue and stock history."""
+
+    def setUp(self):
+        clock = mock.patch(
+            "django.utils.timezone.now", return_value=timezone.make_aware(datetime(2026, 10, 7, 10, 0))
+        )
+        clock.start()
+        self.addCleanup(clock.stop)
+        call_command("seed", stdout=StringIO())
+        call_command("seed_demo", stdout=StringIO())
+        self.admin = User.objects.create_user(
+            username="owner", password="owner-pass-99", full_name="Bopha Ly", role=Role.ADMIN,
+        )
+        User.objects.create_user(
+            username="dara", password="counter-pass-99", full_name="Dara Meas", role=Role.SELLER,
+        )
+        call_command("seed_stock_demo", "--user", "owner", stdout=StringIO())
+        ExchangeRate.objects.update(effective_date=date(2026, 10, 2), rate=RATE)
+        # The shop's own sales: one on 6 Oct, one this morning.
+        with mock.patch(
+            "django.utils.timezone.now", return_value=timezone.make_aware(datetime(2026, 10, 6, 17, 39))
+        ):
+            self.sell_one("TL-0130")
+        self.sell_one("TL-0130")
+
+    def sell_one(self, code):
+        invoice = Invoice.objects.create(customer=Customer.walk_in())
+        InvoiceLine(invoice=invoice, product=Product.objects.get(code=code), quantity=D("1")).save()
+        return complete_invoice(invoice, [T(CASH, str(invoice.lines.get().line_total))], self.admin)
+
+    def load(self):
+        call_command("seed_sales_demo", "--admin", "owner", "--seller", "dara", stdout=StringIO())
+
+    def test_two_of_each_each_on_its_own_day(self):
+        self.load()
+        sok = Customer.objects.get(name="Sok Heng Construction")
+        dara = Customer.objects.get(name="Dara Home Repair")
+        day = lambda moment: timezone.localtime(moment).date()  # noqa: E731
+
+        self.assertEqual(
+            list(ExchangeRate.objects.order_by("effective_date").values_list("effective_date", "rate")),
+            [(date(2026, 9, 1), RATE), (date(2026, 10, 2), RATE)],
+        )
+        quotes = Quotation.objects.filter(customer__in=[sok, dara]).order_by("quote_date")
+        self.assertEqual(
+            [(q.number, q.status, q.quote_date) for q in quotes],
+            [("QUO-20260901001", QuoteStatus.INVOICED, date(2026, 9, 1)),
+             ("QUO-20261006001", QuoteStatus.SENT, date(2026, 10, 6))],
+        )
+
+        sales = Invoice.objects.exclude(customer=Customer.walk_in(), seller=self.admin, status=InvoiceStatus.COMPLETED)
+        done = sales.filter(status=InvoiceStatus.COMPLETED).order_by("sale_date")
+        self.assertEqual(
+            [(i.number, day(i.sale_date), i.exchange_rate, i.due_date, i.customer.name) for i in done],
+            [("INV-20260902001", date(2026, 9, 2), RATE, date(2026, 10, 2), "Sok Heng Construction"),
+             ("INV-20261001001", date(2026, 10, 1), RATE, date(2026, 10, 16), "Dara Home Repair")],
+        )
+        self.assertEqual(done[0].quotation.customer, sok)
+        voided = Invoice.objects.filter(status=InvoiceStatus.VOID).order_by("sale_date")
+        self.assertEqual(
+            [(i.number, day(i.voided_at), i.voided_by.username) for i in voided],
+            [("INV-20261003001", date(2026, 10, 3), "dara"), ("INV-20261006002", date(2026, 10, 6), "owner")],
+        )
+        self.assertEqual(Invoice.objects.filter(status=InvoiceStatus.HELD).count(), 2)
+
+        payments = CustomerPayment.objects.filter(status=PaymentStatus.POSTED).order_by("payment_date")
+        self.assertEqual(
+            [(p.customer.name, p.payment_date, p.tender, p.amount) for p in payments],
+            [("Sok Heng Construction", date(2026, 9, 20), "CASH", D("97.56")),
+             ("Dara Home Repair", date(2026, 10, 3), "KHQR", D("17.70"))],
+        )
+        returns = SalesReturn.objects.order_by("return_date")
+        self.assertEqual(
+            [(r.return_date, r.total, r.credited, r.refunded, r.refund_method) for r in returns],
+            [(date(2026, 9, 22), D("28.00"), D("28.00"), D("0.00"), ""),
+             (date(2026, 10, 5), D("4.70"), D("0.00"), D("4.70"), "CASH")],
+        )
+        # $210.20 on credit, less ៛400,000 at 4,100 and the jigsaw back.
+        self.assertEqual((customer_balance(sok), customer_balance(dara)), (D("84.64"), D("0.00")))
+
+        claims = WarrantyClaim.objects.order_by("created_at")
+        self.assertEqual(
+            [(day(c.created_at), c.product_code, c.out_of_warranty) for c in claims],
+            [(date(2026, 9, 25), "TL-0132", False), (date(2026, 10, 4), "TL-0115", True)],
+        )
+        self.assertTrue(PaymentNote.objects.filter(payment_type="Cash at the counter").exists())
+
+        # Every product's ledger still runs in date order, and agrees with its stock.
+        for product in Product.objects.filter(movements__isnull=False).distinct():
+            dates = list(product.movements.order_by("pk").values_list("movement_date", flat=True))
+            self.assertEqual(dates, sorted(dates), product.code)
+        call_command("recompute_stock", "--check", stdout=StringIO())  # raises on any drift
+
+        # The next real sale takes the number it would have anyway.
+        self.assertEqual(self.sell_one("TL-0130").number, "INV-20261007002")
+
+    def test_a_product_moved_since_the_day_gives_way_to_the_next(self):
+        saw = Product.objects.get(code="TL-0132")
+        with mock.patch(
+            "django.utils.timezone.now", return_value=timezone.make_aware(datetime(2026, 9, 10, 9, 0))
+        ):
+            doc = StockIn.objects.create(supplier=Supplier.objects.first())
+            StockInLine(document=doc, product=saw, packs=D("2"), pack_cost=D("80")).save()
+            post_stock_in(doc, self.admin)
+        self.load()
+        sale = Invoice.objects.get(number="INV-20260902001")
+        self.assertEqual(sale.lines.order_by("id").first().product.code, "TL-0119")
+        for product in (saw, Product.objects.get(code="TL-0119")):
+            dates = list(product.movements.order_by("pk").values_list("movement_date", flat=True))
+            self.assertEqual(dates, sorted(dates), product.code)
+
+    def test_refuses_a_second_run_and_the_wrong_roles(self):
+        with self.assertRaisesMessage(CommandError, "not a Seller"):
+            call_command("seed_sales_demo", "--admin", "owner", "--seller", "owner", stdout=StringIO())
+        self.load()
+        with self.assertRaisesMessage(CommandError, "already loaded"):
+            self.load()

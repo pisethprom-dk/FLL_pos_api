@@ -1,4 +1,4 @@
-# v1.0.2 — role gates for endpoints.
+# v1.0.3 — role gates for endpoints.
 #
 # These gate *access*. They do not enforce business rules — the discount cap,
 # the no-selling-below-zero rule, the frozen-after-posting rule and so on live
@@ -30,7 +30,8 @@ class IsAdminOrReadOnly(BasePermission):
 
 
 class HasScope(BasePermission):
-    """Checks view.required_scope against the role's scope list."""
+    """Checks view.required_scope against the role's scope list; a tuple of
+    scopes lets in a user holding any one of them."""
 
     message = "Your role does not allow this."
 
@@ -38,10 +39,11 @@ class HasScope(BasePermission):
         scope = getattr(view, "required_scope", None)
         if scope is None:
             return True
+        scopes = (scope,) if isinstance(scope, str) else scope
         return bool(
             request.user
             and request.user.is_authenticated
-            and has_scope(request.user, scope)
+            and any(has_scope(request.user, s) for s in scopes)
         )
 
 
