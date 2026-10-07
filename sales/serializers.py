@@ -1,4 +1,4 @@
-# v1.0.2
+# v1.0.4
 from decimal import Decimal
 
 from django.db import transaction
@@ -105,6 +105,11 @@ class QuotationSerializer(LinesMixin, serializers.ModelSerializer):
     line_parent = "quotation"
 
     customer_name = serializers.CharField(source="customer.name", read_only=True)
+    # For the printed quotation, under "Quotation for".
+    customer_phone = serializers.CharField(source="customer.phone", read_only=True)
+    customer_address = serializers.SerializerMethodField(
+        help_text="Address, district and province on one line."
+    )
     status = serializers.ChoiceField(choices=QuoteStatus.choices, read_only=True)
     price_tier = serializers.ChoiceField(choices=PriceTier.choices, read_only=True)
     is_expired = serializers.BooleanField(read_only=True)
@@ -117,13 +122,18 @@ class QuotationSerializer(LinesMixin, serializers.ModelSerializer):
     class Meta:
         model = Quotation
         fields = [
-            "id", "number", "customer", "customer_name", "price_tier",
-            "quote_date", "valid_until", "status", "is_expired", "accepted_at",
+            "id", "number", "customer", "customer_name", "customer_phone", "customer_address",
+            "price_tier", "quote_date", "valid_until", "status", "is_expired", "accepted_at",
             "terms", "note", "total", "invoiced_total", "remaining_total",
             "created_by_name", "lines",
         ]
         read_only_fields = ["id", "number", "price_tier", "status", "accepted_at"]
         extra_kwargs = {"valid_until": {"required": False}}
+
+    @extend_schema_field(serializers.CharField())
+    def get_customer_address(self, obj):
+        c = obj.customer
+        return ", ".join(part for part in (c.address, c.district, c.province) if part)
 
     @extend_schema_field(money())
     def get_total(self, obj):
@@ -173,10 +183,16 @@ class InvoiceLineSerializer(PricedLineSerializer):
         queryset=QuotationLine.objects.all(), required=False, allow_null=True
     )
     qty_returned = serializers.SerializerMethodField()
+    # For the printed invoice: a roll prints the short name, and a line whose
+    # product has a warranty prints it. Read from the product as it is now.
+    product_short_name = serializers.CharField(source="product.short_name", read_only=True)
+    warranty_months = serializers.IntegerField(source="product.warranty_months", read_only=True)
 
     class Meta:
         model = InvoiceLine
-        fields = PRICED_LINE_FIELDS + ["quote_line", "unit_cost", "qty_returned"]
+        fields = PRICED_LINE_FIELDS + [
+            "quote_line", "unit_cost", "qty_returned", "product_short_name", "warranty_months",
+        ]
         extra_kwargs = {"product": {"required": False}}
 
     @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))

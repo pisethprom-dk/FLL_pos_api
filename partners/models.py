@@ -1,11 +1,11 @@
-# v1.0.0 — customers, suppliers, and which supplier carries which product
+# v1.1.0 — customers, suppliers, and which supplier carries which product
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
 
-from catalogue.models import Product
+from catalogue.models import Product, Unit
 from company.models import DocumentType
 from company.services import next_document_number
 from core.exceptions import DomainError
@@ -228,8 +228,9 @@ class ProductSupplier(TimeStampedModel):
     """Which supplier carries which product, under their code and their pack.
 
     No price: what was paid lives on each stock-in line, and a copy here would
-    go stale. Pack size is the supplier's usual pack — a stock-in line stamps
-    its own, so a supplier changing their carton does not alter past documents.
+    go stale. Pack unit and size are the supplier's usual pack ("Carton" of
+    24) — a stock-in line stamps its own, so a supplier changing their carton
+    does not alter past documents.
 
     A link carries no history, so unlike the records it joins it may be deleted.
     """
@@ -242,6 +243,10 @@ class ProductSupplier(TimeStampedModel):
     )
     supplier_sku = models.CharField(
         max_length=60, blank=True, help_text="The supplier's own code for this product."
+    )
+    pack_unit = models.ForeignKey(
+        Unit, null=True, blank=True, on_delete=models.PROTECT, related_name="+",
+        help_text="What the supplier's pack is, e.g. Carton. Blank means the product's own unit.",
     )
     pack_size = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal("1.00"),
@@ -272,15 +277,18 @@ class ProductSupplier(TimeStampedModel):
         return f"{self.product.code} ← {self.supplier.code}"
 
     def clean(self):
+        errors = {}
+        # A pack of several needs a name, or a stock-in line would read
+        # "24 per Piece".
+        if self.pack_unit_id is None and self.pack_size is not None and self.pack_size != 1:
+            errors["pack_unit"] = "Say what the pack is, such as Carton, when it holds more than one."
         # Only checked when the link is made: a supplier retired later keeps
         # the links it already had, the same way past stock-ins keep it.
-        if not self._state.adding:
-            return
-        errors = {}
-        if self.supplier_id and not self.supplier.is_active:
-            errors["supplier"] = "This supplier is inactive and cannot be linked."
-        if self.product_id and not self.product.is_active:
-            errors["product"] = "This product is inactive and cannot be linked."
+        if self._state.adding:
+            if self.supplier_id and not self.supplier.is_active:
+                errors["supplier"] = "This supplier is inactive and cannot be linked."
+            if self.product_id and not self.product.is_active:
+                errors["product"] = "This product is inactive and cannot be linked."
         if errors:
             raise ValidationError(errors)
 

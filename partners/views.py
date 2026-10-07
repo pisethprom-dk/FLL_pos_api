@@ -1,4 +1,4 @@
-# v1.0.1
+# v1.0.2
 from django.db.models import Q
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import viewsets
@@ -109,7 +109,7 @@ class SupplierViewSet(AuditMixin, ActiveFilterMixin, viewsets.ModelViewSet):
 class ProductSupplierViewSet(AuditMixin, viewsets.ModelViewSet):
     """Links may be deleted — they carry no history."""
 
-    queryset = ProductSupplier.objects.select_related("product", "supplier")
+    queryset = ProductSupplier.objects.select_related("product__unit", "supplier", "pack_unit")
     serializer_class = ProductSupplierSerializer
     permission_classes = [IsAdminOrReadOnly]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]

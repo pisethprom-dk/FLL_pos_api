@@ -1,7 +1,14 @@
-# v1.0.2
+# v1.0.4
 from rest_framework import serializers
 
 from catalogue.models import Brand, Category, Product, Unit
+from users.scopes import has_scope
+
+
+def _can_see_cost(serializer):
+    """Cost and stock value are for cost.view (Admin) only, as on sales."""
+    request = serializer.context.get("request")
+    return bool(request and has_scope(request.user, "cost.view"))
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -54,8 +61,13 @@ class ProductSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.full_name", read_only=True)
     brand_name = serializers.CharField(source="brand.name", read_only=True, default=None, allow_null=True)
     unit_name = serializers.CharField(source="unit.name", read_only=True)
+    # Declared, not left to the model, so the schema can say null: a Seller gets
+    # null here (to_representation), never the number and never a missing key.
+    avg_cost = serializers.DecimalField(
+        max_digits=12, decimal_places=4, read_only=True, allow_null=True
+    )
     stock_value = serializers.DecimalField(
-        max_digits=14, decimal_places=2, read_only=True
+        max_digits=14, decimal_places=2, read_only=True, allow_null=True
     )
     needs_reorder = serializers.BooleanField(read_only=True)
     is_out_of_stock = serializers.BooleanField(read_only=True)
@@ -74,7 +86,14 @@ class ProductSerializer(serializers.ModelSerializer):
             "notes", "display_order", "is_active",
         ]
         # Quantity and cost are the ledger's, never typed on this form.
-        read_only_fields = ["id", "qty_on_hand", "avg_cost"]
+        read_only_fields = ["id", "qty_on_hand"]
+
+    def to_representation(self, product):
+        data = super().to_representation(product)
+        if not _can_see_cost(self):
+            data["avg_cost"] = None
+            data["stock_value"] = None
+        return data
 
     def validate_barcode(self, value):
         return value or None
@@ -111,5 +130,5 @@ class ProductLookupSerializer(serializers.ModelSerializer):
             "id", "code", "barcode", "name", "short_name", "model_no",
             "brand_name", "unit_name", "shelf_location",
             "retail_price", "wholesale_price", "is_price_fixed",
-            "track_stock", "qty_on_hand",
+            "track_stock", "qty_on_hand", "warranty_months",
         ]

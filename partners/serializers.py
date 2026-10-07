@@ -1,4 +1,4 @@
-# v1.0.1
+# v1.1.0
 import copy
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -76,11 +76,15 @@ class ProductSupplierSerializer(ModelCleanMixin, serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.name", read_only=True)
     supplier_code = serializers.CharField(source="supplier.code", read_only=True)
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    unit_name = serializers.CharField(source="product.unit.name", read_only=True)
+    pack_unit_name = serializers.CharField(
+        source="pack_unit.name", read_only=True, default=None, allow_null=True
+    )
 
     class Meta:
         model = ProductSupplier
         fields = [
-            "id", "product", "product_code", "product_name",
+            "id", "product", "product_code", "product_name", "unit_name",
             "supplier", "supplier_code", "supplier_name",
-            "supplier_sku", "pack_size", "is_preferred", "notes",
+            "supplier_sku", "pack_unit", "pack_unit_name", "pack_size", "is_preferred", "notes",
         ]

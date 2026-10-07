@@ -1,4 +1,4 @@
-# v1.0.5
+# v1.0.6
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -106,7 +106,6 @@ class DocumentType(models.TextChoices):
     STOCK_IN = "STOCK_IN", "Stock in"
     ADJUSTMENT = "ADJUSTMENT", "Adjustment"
     COUNT = "COUNT", "Stock count"
-    WARRANTY = "WARRANTY", "Warranty claim"
     # Not documents, but numbered the same way when the code is left blank.
     CUSTOMER = "CUSTOMER", "Customer"
     SUPPLIER = "SUPPLIER", "Supplier"

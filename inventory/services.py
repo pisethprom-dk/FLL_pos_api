@@ -1,4 +1,4 @@
-# v1.0.1 — posting stock documents, and the ledger primitives sales will use.
+# v1.1.0 — posting stock documents, and the ledger primitives sales will use.
 #
 # Every change to qty_on_hand and avg_cost goes through _move(), inside the
 # caller's transaction, on a product row locked with select_for_update. Two
@@ -162,10 +162,14 @@ def _mark_posted(doc, user):
     doc.save()
 
 
-def default_pack_size(product, supplier):
-    """The supplier's usual pack for this product, if one is recorded."""
-    link = ProductSupplier.objects.filter(product=product, supplier=supplier).first()
-    return link.pack_size if link else Decimal("1.00")
+def default_pack(product, supplier):
+    """The supplier's usual pack for this product as (unit, size): their
+    link's, or the product's own unit one at a time."""
+    link = (
+        ProductSupplier.objects.select_related("pack_unit")
+        .filter(product=product, supplier=supplier).first()
+    )
+    return (link.pack_unit, link.pack_size) if link else (None, Decimal("1.00"))
 
 
 # --- stock in ----------------------------------------------------------------

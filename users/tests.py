@@ -1,4 +1,4 @@
-# v1.0.1 — the auth rules that matter, tested
+# v1.0.3 — the auth rules that matter, tested
 import time
 from datetime import timedelta
 
@@ -122,6 +122,15 @@ class RoleScopeTests(TestCase):
         self.assertTrue(has_scope(self.seller, "invoice.void.own"))
         self.assertFalse(has_scope(self.seller, "invoice.void.any"))
         self.assertTrue(has_scope(self.admin, "invoice.void.any"))
+
+    def test_only_an_admin_voids_a_payment(self):
+        self.assertTrue(has_scope(self.admin, "payment.void"))
+        self.assertFalse(has_scope(self.seller, "payment.void"))
+
+    def test_only_an_admin_deletes_a_warranty_claim(self):
+        self.assertTrue(has_scope(self.admin, "warranty.delete"))
+        self.assertFalse(has_scope(self.seller, "warranty.delete"))
+        self.assertTrue(has_scope(self.seller, "warranty.edit"))
 
     def test_only_admin_manages_users(self):
         client = APIClient()

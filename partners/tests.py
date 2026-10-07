@@ -1,4 +1,4 @@
-# v1.0.0 — the partner rules that matter
+# v1.1.0 — the partner rules that matter
 from decimal import Decimal
 from io import StringIO
 
@@ -180,6 +180,17 @@ class ProductSupplierTests(TestCase):
         link.notes = "Stopped carrying Bosch"
         link.full_clean()
 
+    def test_a_pack_of_several_says_what_the_pack_is(self):
+        link = ProductSupplier(product=self.product, supplier=self.total, pack_size=Decimal("24"))
+        with self.assertRaises(ValidationError) as caught:
+            link.full_clean()
+        self.assertIn("pack_unit", caught.exception.message_dict)
+
+        link.pack_unit = Unit.objects.get(code="CTN")
+        link.full_clean()
+        # One at a time in the product's own unit needs no name.
+        ProductSupplier(product=self.product, supplier=self.lim).full_clean()
+
 
 class PartnersApiTests(TestCase):
     def setUp(self):
@@ -337,6 +348,34 @@ class PartnersApiTests(TestCase):
         self.assertEqual([r["supplier_name"] for r in res.data["results"]], ["Lim Heng"])
 
         self.assertEqual(self.client.delete(f"/api/partners/product-suppliers/{first}/").status_code, 204)
+
+    def test_a_link_names_its_pack(self):
+        cat = Category.objects.create(code="CAT-03", name="Fixings")
+        screw = Product.objects.create(
+            code="FX-0302", name="Wood screw 4×40mm", category=cat, unit=Unit.objects.get(code="BOX"),
+        )
+        total = make_supplier()
+        self._as(self.admin, "owner-pass-99")
+        url = "/api/partners/product-suppliers/"
+
+        res = self.client.post(url, {"product": screw.pk, "supplier": total.pk, "pack_size": "24"}, format="json")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("pack_unit", res.data)
+
+        carton = Unit.objects.get(code="CTN")
+        res = self.client.post(
+            url, {"product": screw.pk, "supplier": total.pk, "pack_size": "24", "pack_unit": carton.pk},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(
+            (res.data["pack_unit_name"], res.data["pack_size"], res.data["unit_name"]),
+            ("Carton", "24.00", "Box"),
+        )
+
+        # Dropping the unit from a link of 24 is refused the same way.
+        res = self.client.patch(f"{url}{res.data['id']}/", {"pack_unit": None}, format="json")
+        self.assertEqual(res.status_code, 400)
 
     def test_seller_cannot_change_product_supplier_links(self):
         self._as(self.seller, "counter-pass-99")

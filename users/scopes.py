@@ -1,4 +1,4 @@
-# v1.0.1 — one place that says what each role may do.
+# v1.0.3 — one place that says what each role may do.
 #
 # /api/auth/me/ returns this list so the Angular app hides menu items from it
 # rather than hard-coding role checks in the frontend. When a rule changes here,
@@ -8,9 +8,13 @@ ADMIN_SCOPES = [
     "sell",
     "quotation.view", "quotation.edit",
     "payment.view", "payment.record",
+    # Voiding a customer payment reopens the invoices it paid (Admin only).
+    "payment.void",
     "return.view", "return.create",
     "invoice.void.any",
     "warranty.view", "warranty.edit",
+    # Deleting a warranty claim logged by mistake (Admin only).
+    "warranty.delete",
     "stock.view", "stock.post",
     "catalogue.view", "catalogue.edit",
     "partner.view", "partner.edit",

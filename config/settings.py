@@ -1,4 +1,4 @@
-# v1.0.5 — POS backend settings
+# v1.0.6 — POS backend settings
 from datetime import timedelta
 from pathlib import Path
 
@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "partners",
     "inventory",
     "sales",
+    "warranty",
 ]
 
 MIDDLEWARE = [
@@ -154,5 +155,6 @@ SPECTACULAR_SETTINGS = {
         "PaymentStatusEnum": "sales.models.PaymentStatus",
         "TenderKindEnum": "sales.money.TENDER_KINDS",
         "PaymentTenderEnum": "sales.models.PaymentTender",
+        "ClaimStatusEnum": "warranty.models.ClaimStatus",
     },
 }

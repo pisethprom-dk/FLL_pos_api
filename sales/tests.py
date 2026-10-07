@@ -1,4 +1,4 @@
-# v1.0.2 — the sales rules that matter
+# v1.0.5 — the sales rules that matter
 from datetime import timedelta
 from decimal import Decimal as D
 from io import StringIO
@@ -179,6 +179,18 @@ class QuotationTests(SalesTestCase):
         line = q.lines.get()
         self.assertEqual((q.price_tier, line.unit_price, line.line_total), ("WHOLESALE", D("69.00"), D("690.00")))
 
+    def test_a_quotation_carries_the_customer_s_phone_and_address(self):
+        Customer.objects.filter(pk=self.sok.pk).update(
+            phone="012 330 441", address="No 10, Street 271", district="", province="Phnom Penh",
+        )
+        q = self.quote(self.sok, (self.drill, "1"), accept=False)
+        self.as_seller()
+        data = self.client.get(f"/api/sales/quotations/{q.pk}/").data
+        self.assertEqual(
+            (data["customer_phone"], data["customer_address"]),
+            ("012 330 441", "No 10, Street 271, Phnom Penh"),
+        )
+
     def test_a_walk_in_gets_no_quotation(self):
         self.as_seller()
         res = self.client.post("/api/sales/quotations/", {"customer": self.walk_in.pk}, format="json")
@@ -245,6 +257,31 @@ class InvoiceTests(SalesTestCase):
         self.assertEqual((invoice.status, invoice.number), ("HELD", None))
         # The failed sale did not use up a number.
         self.assertEqual(self.sell(self.walk_in, (self.drill, "1")).number, first_invoice_number())
+
+    def test_a_line_carries_what_the_printed_invoice_needs(self):
+        Product.objects.filter(pk=self.drill.pk).update(short_name="Impact drill 710W", warranty_months=12)
+        sold = self.sell(self.walk_in, (self.drill, "1"), (self.grinder, "1"))
+        self.as_seller()
+        lines = self.client.get(f"/api/sales/invoices/{sold.pk}/").data["lines"]
+        self.assertEqual(
+            [(l["product_code"], l["product_short_name"], l["warranty_months"]) for l in lines],
+            [("TL-0101", "Impact drill 710W", 12), ("TL-0118", "Angle grinder 100mm", 0)],
+        )
+
+    def test_the_sales_list_can_leave_held_sales_out(self):
+        sold = self.sell(self.walk_in, (self.drill, "1"))
+        voided = void_invoice(self.sell(self.walk_in, (self.grinder, "1")), self.admin, "Rung up twice")
+        held = self.held(self.walk_in, (self.drill, "1"))
+        self.as_seller()
+
+        def ids(query):
+            res = self.client.get(f"/api/sales/invoices/?{query}")
+            self.assertEqual(res.status_code, 200)
+            return {row["id"] for row in res.data["results"]}
+
+        self.assertEqual(ids("held=false"), {sold.pk, voided.pk})
+        self.assertEqual(ids("held=true"), {held.pk})
+        self.assertEqual(ids(""), {sold.pk, voided.pk, held.pk})
 
     def test_the_api_refuses_a_discount_over_the_cap_or_on_a_fixed_price(self):
         self.as_seller()

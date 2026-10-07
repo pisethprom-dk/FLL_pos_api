@@ -1,4 +1,4 @@
-# v1.0.1 — the catalogue rules that matter
+# v1.0.3 — the catalogue rules that matter
 from decimal import Decimal
 from io import StringIO
 
@@ -152,6 +152,28 @@ class CatalogueApiTests(TestCase):
         )
         self.assertEqual(res.status_code, 403)
 
+    def test_a_seller_gets_no_cost_or_stock_value(self):
+        Product.objects.filter(pk=self.product.pk).update(
+            avg_cost=Decimal("52.4000"), qty_on_hand=Decimal("3.00")
+        )
+        self._as(self.seller, "counter-pass-99")
+        row = self.client.get(f"/api/catalogue/products/{self.product.pk}/").data
+        # Null, never left out, so the Angular client's type stays true.
+        self.assertIn("avg_cost", row)
+        self.assertIsNone(row["avg_cost"])
+        self.assertIsNone(row["stock_value"])
+        listed = self.client.get("/api/catalogue/products/").data["results"][0]
+        self.assertIsNone(listed["avg_cost"])
+
+    def test_an_admin_sees_cost_and_stock_value(self):
+        Product.objects.filter(pk=self.product.pk).update(
+            avg_cost=Decimal("52.4000"), qty_on_hand=Decimal("3.00")
+        )
+        self._as(self.admin, "owner-pass-99")
+        row = self.client.get(f"/api/catalogue/products/{self.product.pk}/").data
+        self.assertEqual(row["avg_cost"], "52.4000")
+        self.assertEqual(row["stock_value"], "157.20")
+
     def test_quantity_sent_to_the_api_is_ignored(self):
         self._as(self.admin, "owner-pass-99")
         res = self.client.patch(
@@ -192,6 +214,8 @@ class CatalogueApiTests(TestCase):
         row = res.data[0]
         self.assertIn("wholesale_price", row)
         self.assertIn("shelf_location", row)
+        # A warranty claim picked from the catalogue takes its duration.
+        self.assertIn("warranty_months", row)
         self.assertNotIn("description", row)
 
 
