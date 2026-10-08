@@ -1,5 +1,7 @@
-# v1.0.0 — custom user. AUTH_USER_MODEL is set before the first migration on
+# v1.1.0 — custom user. AUTH_USER_MODEL is set before the first migration on
 # purpose: swapping it on a live database is painful.
+import uuid
+
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.db import models
 from django.utils import timezone
@@ -35,6 +37,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField(default=False)  # Django admin access only
     must_change_password = models.BooleanField(default=True)
     last_login_at = models.DateTimeField(null=True, blank=True)
+    # One sign-in at a time: every token carries this as its `sid`, and a new
+    # sign-in replaces it, so the device signed in before is refused.
+    current_session = models.UUIDField(null=True, blank=True, editable=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
@@ -63,3 +68,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     def touch_login(self):
         self.last_login_at = timezone.now()
         self.save(update_fields=["last_login_at"])
+
+    def start_session(self):
+        """A new sign-in. Whatever session this user had before stops working."""
+        self.current_session = uuid.uuid4()
+        self.save(update_fields=["current_session"])
+        return str(self.current_session)

@@ -123,7 +123,7 @@ container but `docker compose logs web` keeps its output.
 | — | `warranty` | Done — the warranty claims log (added 2026-10-06, with the frontend's step 5c-5) |
 | 6 | `reports` | Done (2026-10-07): daily sales, stock on hand, receivables, the dashboard |
 
-248 tests passing.
+254 tests passing.
 
 **Inventory must come before sales.** A sale decrements stock and stamps a
 cost; both live in the movement ledger. Building sales first means writing the
@@ -290,6 +290,18 @@ httpOnly cookie scoped to `/api/auth/`, rotated and blacklisted on every use.
 That gives a sliding 60-minute idle logout: an active till never expires, an
 idle one dies after an hour. The `auth_time` claim rides through rotations and
 caps the whole session at 12 hours.
+
+**One session per user** (owner's choice, 2026-10-08, Admins too): the latest
+sign-in wins. Login stamps a new `User.current_session` and puts it in the
+tokens as `sid`; `users.authentication.SessionJWTAuthentication` (the default)
+and the refresh endpoint refuse a token whose `sid` is not the user's, so the
+earlier device is out on its next click — the user row is read on every
+request anyway, so it costs no query. The 401 carries `code`:
+`session_replaced` (signed in elsewhere) or `session_ended` (signed out, or an
+Admin reset the password). Sign-out ends the session only while it is still
+the current one. Tabs in one browser share the cookie, so they are one session.
+`users/schema.py` tells drf-spectacular the subclass is the same `jwtAuth`
+scheme — its extension does not match subclasses.
 
 Serve Angular and the API from one origin through nginx. Cross-origin cookies
 with credentials are a harder problem than it looks.

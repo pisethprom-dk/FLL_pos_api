@@ -1,4 +1,4 @@
-# v1.0.8 — POS backend settings
+# v1.0.9 — POS backend settings
 from datetime import timedelta
 from pathlib import Path
 
@@ -106,7 +106,8 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # JWT, refused once the user has signed in on another device
+        "users.authentication.SessionJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
