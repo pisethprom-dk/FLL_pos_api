@@ -1,5 +1,4 @@
-<!-- v1.3.3 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
-
+<!-- v1.4.10 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
 # POS — tool shop, single outlet
 
 Back office for one hardware shop in Phnom Penh. Prices in US dollars, takes
@@ -27,6 +26,17 @@ API and a missing dependency — both of which looked fine on inspection.
 
 **UI work is delivered as a downloadable file, never as code pasted in chat.**
 
+### Workflow
+
+1. First, think through the problem. Read the codebase and write a plan in
+   `tasks/todo.md`.
+2. The plan is a checklist of todo items.
+3. Check in with the owner before starting work — they verify the plan.
+4. Then complete the todos one by one, marking them off as you go.
+5. At every step, give a high-level explanation of what changed.
+6. Keep every change simple and minimal. Avoid big rewrites.
+7. At the end, add a review section to `tasks/todo.md` summarising the changes.
+
 ---
 
 ## Running it
@@ -39,8 +49,8 @@ docker compose exec web python manage.py createsuperuser
 docker compose exec web python manage.py test
 ```
 
-`seed` creates the rows the system assumes exist: company profile, ten
-counters with prefixes (eight documents plus customer and supplier codes), seven
+`seed` creates the rows the system assumes exist: company profile, nine
+counters with prefixes (seven documents plus customer and supplier codes), seven
 units, an opening exchange rate and the walk-in customer. Safe to re-run.
 
 `seed_demo` loads a sample tool-shop catalogue for development: 11 units, 8
@@ -48,12 +58,51 @@ brands, 23 categories, 87 products (data in `catalogue/demo_data.py`, Khmer on
 categories and units). It keeps the mockup's codes and prices, leaves existing
 rows alone, and never touches stock. Not for the live shop.
 
+`seed_stock_demo --user <an Admin> [--reset]` loads a sample stock history on
+top of `seed_demo`, as a working shop would have it from go-live on 1 Aug 2026
+(`--since` to move it): opening balances per category, stock-ins twice a week
+from five suppliers with their packs, adjustments of every reason, a count at
+each month end, one stock-in reversed and entered again, and drafts waiting.
+Everything posts through `inventory/services.py` in date order, then each
+document's stamps are set to its own date. It refuses while stock records
+exist; `--reset` clears the whole stock area first (documents, movements,
+stock and cost, GRN/ADJ/CNT numbers) and refuses once there are sales.
+Development only — never the live shop.
+
+`seed_sales_demo --admin <an Admin> --seller <a Seller>` adds sample selling
+on top of both (owner's request, 2026-10-07): two store customers, two
+quotations (one invoiced, one sent), two sales (one on credit, past due; one
+part credit), two voided, two held, two customer payments (one in riel), two
+returns (one credited, one refunded), two warranty claims, a payment note,
+and — where no rate is held five weeks back — a rate at the earliest held one.
+Each document posts through `sales/services.py` as of its own moment (the
+clock patched to that day in shop hours), so numbers, rates, due dates, stock
+movements and stamps are that day's; a daily number follows on from what its
+day already holds, and both daily counters are put back afterwards. A
+back-dated sale takes, per line, the first product not moved since its day,
+so the ledger stays in date order. Days count back from the run day. Refuses
+a second run; a completed sale cannot be deleted, so going back means
+restoring a dump (`backups/`, git-ignored). Development only.
+
 `recompute_stock` rebuilds `qty_on_hand` and `avg_cost` from the ledger;
 `--check` only reports, and exits non-zero on drift. After a change to
 `requirements.txt`, rebuild the image (`docker compose up -d --build`).
 
 API docs at `http://localhost:8000/api/docs/`. There is **no root view** — `/`
 returns 404 by design.
+
+### Production (one EC2)
+
+Owner's choices, 2026-10-09; steps in `deploy/README.md`. nginx on the host
+terminates TLS (certbot), serves the Angular build, `/static/` and `/media/`,
+and proxies `/api/` and `/admin/` to gunicorn on `127.0.0.1:8000`.
+`docker-compose.prod.yml` (project `pos-prod`) runs gunicorn and Postgres,
+which is not published; `deploy/nginx/pos.conf` is the site, and answers 404
+for `/api/docs/` and `/api/schema/`. Settings come from env: with `DEBUG`
+off, `SECRET_KEY` and `DATABASE_URL` are required and the server refuses to
+start without them; in development they fall back to the compose defaults.
+`SECURE_PROXY_SSL_HEADER` trusts `X-Forwarded-Proto` only because nginx
+always sets it itself. The entrypoint waits on `DATABASE_URL`'s host.
 
 ### Running tests without Postgres
 
@@ -84,9 +133,10 @@ container but `docker compose logs web` keeps its output.
 | 3 | `partners` | Done — customers, walk-in, suppliers, product–supplier links |
 | 4 | `inventory` | Done — movement ledger, stock-in, adjustment, count, reversal, CSV/Excel import |
 | 5 | `sales` | Done — quotation, invoice (held/complete), void, customer payment, return, balances |
-| 6 | `reports` | **Next** — read-only endpoints |
+| — | `warranty` | Done — the warranty claims log (added 2026-10-06, with the frontend's step 5c-5) |
+| 6 | `reports` | Done (2026-10-07): daily sales, stock on hand, receivables, the dashboard |
 
-191 tests passing.
+255 tests passing.
 
 **Inventory must come before sales.** A sale decrements stock and stamps a
 cost; both live in the movement ledger. Building sales first means writing the
@@ -205,18 +255,39 @@ stores as NULL, not `""`.
 Service centres reuse the Supplier model via `supplier_type`.
 
 **Product–supplier link.** A `ProductSupplier` table (owner's choice):
-`supplier_sku`, `pack_size`, `is_preferred`, `notes`. One link per pair, at
-most one preferred per product — marking a new one unmarks the old. No price on
-it: what was paid lives on stock-in lines. Links carry no history, so they may
-be deleted; customers and suppliers may not.
+`supplier_sku`, `pack_unit`, `pack_size`, `is_preferred`, `notes`. The pack is
+the supplier's usual one — "Carton" of 24 (`pack_unit` added 2026-10-05, owner's
+choice); blank means the product's own unit, one at a time, and a pack of more
+than one must name its unit. One link per pair, at most one preferred per
+product — marking a new one unmarks the old. No price on it: what was paid
+lives on stock-in lines. Links carry no history, so they may be deleted;
+customers and suppliers may not.
 
-**Partner codes.** A blank code is numbered from `DocumentCounter` with the
-same fixed six digits as documents: `CUS-000001`, `SUP-000001`. A code typed by
+**Document numbers.** Quotations and invoices are numbered by day — prefix,
+date, running number that starts again at 001 each day: `QUO-20261005001`,
+`INV-20261005001` (owner's decision). Past 999 in a day it grows to four digits
+rather than refuse a sale. The date is the shop's (Asia/Phnom_Penh) on the day
+the number is taken: an invoice's on completion, a quotation's on creation —
+a back-dated quote keeps today's date in its number. Every other document runs
+on, six digits: `PAY-000147`, `RTN-…`, `GRN-…`, `ADJ-…`, `CNT-…`. Which types are
+daily is `DocumentCounter.DAILY`, in code; the prefix stays the Admin's.
+
+**Partner codes.** A blank code is numbered from `DocumentCounter` with six
+digits, like the non-daily documents: `CUS-000001`, `SUP-000001`. A code typed by
 hand is kept, and the counter skips past it. The walk-in is `CUS-000000`.
 
 **Warranty claims.** A tracking log, not a transaction. Seven fields: warranty
-number, product code, product name, duration, expiry, note, status. No invoice
-link, no money, no stock effect.
+number, product code, product name, duration, expiry, note, status — plus the
+customer's name and phone, both optional (owner's choices, 2026-10-06). No
+invoice link, no money, no stock effect. The product is kept as text, so an
+item not in the catalogue can still be logged; the screen fills it from the
+product lookup, which sends `warranty_months` for that. A claim is known by
+the number on its warranty card — required, not unique, since one card can be
+claimed twice — so there is no claim counter. Status: Received → Sent for
+repair → Ready for collection → Closed, or Rejected, in any order; the first
+three are open. Out of warranty: an expiry date before the day the claim was
+logged. Only an Admin deletes one (`warranty.delete`: `HasReadWriteScope`
+takes a view's `delete_scope` for DELETE).
 
 **Not in scope:** payables, serial tracking, landed cost, stock reservation,
 multiple outlets, variants, loan units, cash sessions. Riel rounding, the
@@ -233,8 +304,25 @@ That gives a sliding 60-minute idle logout: an active till never expires, an
 idle one dies after an hour. The `auth_time` claim rides through rotations and
 caps the whole session at 12 hours.
 
+**One session per user** (owner's choice, 2026-10-08, Admins too): the latest
+sign-in wins. Login stamps a new `User.current_session` and puts it in the
+tokens as `sid`; `users.authentication.SessionJWTAuthentication` (the default)
+and the refresh endpoint refuse a token whose `sid` is not the user's, so the
+earlier device is out on its next click — the user row is read on every
+request anyway, so it costs no query. The 401 carries `code`:
+`session_replaced` (signed in elsewhere) or `session_ended` (signed out, or an
+Admin reset the password). Sign-out ends the session only while it is still
+the current one. Tabs in one browser share the cookie, so they are one session.
+`users/schema.py` tells drf-spectacular the subclass is the same `jwtAuth`
+scheme — its extension does not match subclasses.
+
 Serve Angular and the API from one origin through nginx. Cross-origin cookies
 with credentials are a harder problem than it looks.
+
+**One public endpoint besides login and refresh:** `GET /api/company/brand/`
+returns the shop's name, Khmer name, address and logo for the sign-in page —
+what every receipt prints anyway, nothing more. It runs no authentication, so
+a stale token in the browser cannot turn it into a 401. It is read-only.
 
 ### Frontend (scaffolded in `../pos_frontend`)
 
@@ -279,7 +367,7 @@ checks, so both ends stay in step.
 |---|---|---|
 | Sell, quotations, payments, returns | yes | yes |
 | Void | any | own, same day |
-| Warranty claims | yes | yes |
+| Warranty claims | yes, and delete | yes, no delete |
 | Stock documents | yes | **none** |
 | Catalogue, customers, suppliers | write | read |
 | Company setup, users | yes | none |
@@ -306,7 +394,8 @@ inventory/    stock movement ledger, stock-in, adjustment, count, import,
               services.py (the only code that moves stock or cost)
 sales/        quotation, invoice, void, customer payment, return,
               money.py (discount cap, settling tenders), services.py (balances)
-reports/      NEXT — read-only endpoints
+warranty/     warranty claims log
+reports/      read-only report endpoints, worked out on every call (services.py)
 ```
 
 ---
@@ -364,7 +453,9 @@ a document of the same type that replays each movement with its sign turned —
 inbound goes back out taking its own value, outbound comes back at its stamped
 cost. Refused once the stock has gone, for a reversal, or a second time.
 
-- Stock-in: pack size defaults from the `ProductSupplier` link. The average
+- Stock-in: a line sent without a pack size takes the `ProductSupplier`
+  link's pack — unit and size (`default_pack()`); a line that gives its own
+  keeps it. An imported row without pack columns does the same. The average
   takes `line_total`, the money paid, not the rounded unit cost.
 - Adjustment: direction is fixed by reason. Supplier required for return and
   replacement, refused for the rest. Opening balance allowed while
@@ -374,6 +465,23 @@ cost. Refused once the stock has gone, for a reversal, or a second time.
   children. `expected_qty` is read when each count is entered, so sales made
   while the count is open are not differences. A product is on one open count
   at a time.
+- Totals: a stock-in's `total` is the sum of its line totals. An adjustment's
+  `total` (signed: below zero for stock out) and a count's `differences` and
+  `total` are null until posted — line values are stamped at posting, and a
+  count stays blind.
+- Reversal figures: a reversal stores a copy of its original's lines (a
+  stock-in line may not hold a negative number), and the API turns them as it
+  sends them, so each reads the way stock moved (owner's choice, 2026-10-06;
+  `TURNED` / `TURNED_ON_LINES` in `inventory/serializers.py`): a stock-in's
+  total, quantity and line totals; an adjustment's total, line values and
+  `direction` (a damage reversal reads IN); a count's total, differences and
+  values, with counted and expected swapped so counted − expected still equals
+  the difference. What was typed is sent as stored; the ledger is untouched.
+
+- Each stock-in, adjustment and count line sends its product's
+  `brand_name` (null without one) and `category_name` (the category's own
+  name, not "group → name"); the product lookup sends `category_name` too
+  (2026-10-09, for the lines' brand · category on screen).
 
 **Import.** `POST .../{id}/import/` with a CSV or .xlsx file. `commit=false`
 checks every row (Matched / No such code / Cost missing / …) and adds nothing;
@@ -393,20 +501,25 @@ at the invoice's stamped rate; change comes from cash only, split with
 half a ៛100 note is not a shortfall. Every cent riel rounding creates is kept
 in `Invoice.rounding`, so cash reconciles.
 
-**Quotation.** Number at creation. Draft → Sent → Accepted, or Rejected (note
+**Quotation.** Sends the customer's `customer_phone` and `customer_address`
+(address, district, province on one line) for the printed quotation. Number at creation. Draft → Sent → Accepted, or Rejected (note
 required); Draft may go straight to Accepted. Lines editable while Draft or
 Sent, fixed from Accepted. Tier and prices stamped from the customer; no cost,
 no rate. `is_expired` is derived and only warns. `qty_invoiced` per line;
 Invoiced when every line is taken; a void puts quantity back and re-opens it.
 
-**Invoice.** `HELD` has no number, no stock, no rate; any till may resume or
+**Invoice.** The list's `held=false` leaves held sales out (the Sales screen);
+each line also sends the product's `short_name` and `warranty_months` for the
+printed invoice (read from the product, not stamped on the sale);
+`HELD` has no number, no stock, no rate; any till may resume or
 cancel it. A new customer on a held sale reprices its lines. `complete_invoice()`
 in one transaction: locks invoice, customer and quote; checks credit
 eligibility, then cover, then the limit; takes the number; stamps the rate;
 `issue()`s each stock line and copies the movement's cost to `unit_cost`;
 writes tenders. A quote invoice takes only the quote's lines at the quote's
 price and discount. Sellers never see `unit_cost` or profit (`cost.view`
-scope, Admin only).
+scope, Admin only). The same holds on the catalogue: `ProductSerializer`
+sends `avg_cost` and `stock_value` as null without `cost.view`.
 
 **Void.** `CanVoidInvoice` decides who; `void_invoice()` reverses the
 invoice's movements through `inventory.services.reverse_movements()` and keeps
@@ -415,7 +528,8 @@ the number, marked VOID.
 **Customer payment.** Applied in full at save (oldest first when no
 allocations are sent), never more than an invoice's balance. Riel stamps the
 rate of the payment date. Frozen; an Admin may void it, which re-opens the
-invoices.
+invoices (`IsAdmin` on the endpoint; the `payment.void` scope tells the
+frontend to show Void).
 
 **Return.** Draft → Posted against one invoice, capped at sold less already
 returned. Fit-to-sell lines `receive()` at the sale line's stamped cost; faulty
@@ -427,11 +541,57 @@ serves the till and the payment screen.
 
 ---
 
-## Next slice — `reports`
+## Slice 6 — `reports`
 
-Read-only endpoints: daily sales (by day, seller, tender; Seller sees only
-their own), stock on hand, receivables aging. Profit reads the cost stamped on
-each sale line. Agree the design before building.
+Read-only endpoints, one at a time (owner's choice, 2026-10-07), each worked
+out on every call — nothing is stored.
+
+**Daily sales** (`GET /api/reports/daily-sales/`, `date_from`, `date_to`,
+`seller`; this month by default). Completed sales by the day they were sold
+(shop time zone); voided and held left out. Summary (sales, in riel at each
+sale's stamped rate, invoices, average, discount, cost/profit/margin,
+returns posted in the period), by day, by seller, by tender. Cash = total −
+KHQR − credit, so the three add up to sales. Cost is the cost stamped on each
+sale line. A Seller (`report.sales.own`) is always held to their own sales;
+cost, profit and margin are null without `cost.view`. `HasScope` takes a
+tuple of scopes: any one lets the user in.
+
+**Stock on hand** (`GET /api/reports/stock-on-hand/`, `status`, `category`,
+`brand`, `search`; `report.stock`, both roles). As at today. Products that
+track stock and are active, plus retired ones still holding stock. Status,
+the first that applies: OUT (nothing on hand), REORDER (at or below the
+reorder level), IDLE (holding stock, no movement for 90 days —
+`IDLE_DAYS`), OK. The summary covers all stock whatever the filters (value,
+below reorder, out, no movement and its value, the last posted count); the
+rows are the filtered ones, with their total. Average cost and value are
+null without `cost.view`.
+
+**Receivables** (`GET /api/reports/receivables/`, `show`: overdue,
+over_limit, on_hold; `report.receivables`, Admin only). As at today. Each
+open invoice's balance (`invoices_with_balance()`: on credit less posted
+payments and returns credited) goes into 0–30, 31–60, 61–90 or over 90 by the
+days since it was sold (owner's choice). One row per customer who owes:
+the four columns, owed, limit, room left (below zero when over), overdue
+(an invoice past its due date), over limit, on hold. Summary over everyone
+who owes: owed, in riel at today's rate, past 60 days and its share,
+collected this month (posted payments), who is over limit or on hold. A
+customer's invoices come from the account endpoint.
+
+**Dashboard** (`GET /api/reports/dashboard/`, anyone signed in). Today at a
+glance, each part `null` for whoever may not see it: `sales` (the report.sales
+scopes — a Seller's own: today's figures, the last 7 days oldest first with
+empty days as 0.00 and each day's share of the best for the bar, today by
+main category — a sub-category counts in its group — the four biggest then
+Other, the last 5 completed sales with Cash / KHQR / Credit / Mixed),
+`cash_today` (report.sales.all: cash kept from today's sales after change +
+cash payments posted today − cash refunds posted today; not a drawer count),
+`stock` (report.stock: the summary, up to 5 below reorder — out of stock
+first, then by code — and how many more), `owed` (report.receivables: the 5
+who owe most, totals over everyone, how many more), `held_sales` (sell,
+every till's), `quotations` (quotation.view: SENT, of those expiring within
+`EXPIRING_DAYS` = 7 or expired), `warranty` (warranty.view: open claims, of
+those out of warranty). Built from `daily_sales()`, `stock_on_hand()` and
+`receivables()`.
 
 ---
 
@@ -440,23 +600,10 @@ each sale line. Agree the design before building.
 - No root view — `/` is a 404. Worth adding a version/health response.
 - Shelf location is used by stock screens but absent from the Products form in
   the mockup.
-- Warranty claims have no customer or phone, so nothing says who to call when
-  an item is ready for collection.
-- The import-list dialog exists in the mockup but nothing opens it. The
-  backend import is built; the Angular screens need a button for it.
-- The mockup's adjustment reasons lack "Supplier replacement", and its count
-  screen should only show expected quantities once posted.
-- No barcode entry on stock-in after the search row was removed from the
-  mockup.
-- The mockup has no screen for product–supplier links, and shows partner codes
-  with four digits (`CUS-0001`); the backend uses six.
 - The mockup's Returns & voids screen and Void dialog still speak of cash
   sessions. There are none: the rule is same seller, same day.
 - The mockup's Exchange rate screen offers THB; `company/currency.py` knows
   only USD and KHR.
-- `seed` creates a `WRC-` warranty counter that nothing uses — claims are
-  identified by the number on the warranty card. Decide whether to drop it.
-- Warranty claims are not assigned to a slice.
 - The mockup's Sell screen and quotation still show an invoice-level / quote
   discount; both are gone. A line's $ discount is per unit, not per line.
 - The mockup's return dialog offers "Settle by: credit to the account"; the

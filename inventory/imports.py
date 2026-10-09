@@ -1,4 +1,4 @@
-# v1.0.0 — reading a product list from a CSV or Excel file onto a draft.
+# v1.1.0 — reading a product list from a CSV or Excel file onto a draft.
 #
 # Two calls, same file: the first checks every row and adds nothing, the second
 # adds the rows that passed. A row with a problem is never imported — the file
@@ -18,7 +18,7 @@ from django.db.models.functions import Upper
 from catalogue.models import Product, Unit
 from core.exceptions import DomainError
 from inventory.models import Adjustment, AdjustmentLine, AdjustmentReason, StockIn, StockInLine
-from inventory.services import default_pack_size, opening_balance_allowed
+from inventory.services import default_pack, opening_balance_allowed
 
 MAX_ROWS = 5000
 COLUMNS = ("code", "quantity", "unit_cost", "pack_size", "pack_unit")
@@ -195,12 +195,19 @@ def import_lines(doc, upload, *, has_header=True, replace=False, commit=False):
         for r in ready:
             product = products[r["product"]]
             if stock_in:
+                # A row without pack columns takes the supplier's usual pack;
+                # a row that gives only one of them keeps it.
+                link_unit, link_size = default_pack(product, doc.supplier)
+                if r["pack_size"] is None and r["pack_unit"] is None:
+                    pack_unit_id = link_unit.pk if link_unit else None
+                else:
+                    pack_unit_id = r["pack_unit"]
                 StockInLine(
                     document=doc,
                     product=product,
-                    pack_unit_id=r["pack_unit"],
+                    pack_unit_id=pack_unit_id,
                     packs=r["quantity"],
-                    pack_size=r["pack_size"] or default_pack_size(product, doc.supplier),
+                    pack_size=r["pack_size"] or link_size,
                     pack_cost=r["unit_cost"],
                 ).save()
             else:

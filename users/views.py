@@ -1,4 +1,4 @@
-# v1.0.2
+# v1.1.0
 from django.conf import settings
 from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
@@ -7,6 +7,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.schema import DetailSerializer
 from users.models import User
@@ -17,21 +18,26 @@ from users.serializers import (
     LoginSerializer,
     MeSerializer,
     PasswordChangeSerializer,
+    SessionEndedSerializer,
     SessionSerializer,
     UserCreatedSerializer,
     UserCreateSerializer,
     UserSerializer,
 )
 from users.tokens import (
+    SESSION_ENDED,
     clear_refresh_cookie,
+    end_session,
     issue_refresh,
+    refusal_code,
     rotate_refresh,
     set_refresh_cookie,
 )
 
 
 class LoginView(APIView):
-    """Access token in the body, refresh token in an httpOnly cookie."""
+    """Access token in the body, refresh token in an httpOnly cookie.
+    Signing in ends this user's session on any other device."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -57,25 +63,29 @@ class RefreshView(APIView):
 
     @extend_schema(
         request=None,
-        responses={200: SessionSerializer, 401: DetailSerializer},
-        description="Reads the refresh cookie, rotates it, and returns a new access token.",
+        responses={200: SessionSerializer, 401: SessionEndedSerializer},
+        description=(
+            "Reads the refresh cookie, rotates it, and returns a new access token. "
+            "A 401 says why: session_replaced when the user has since signed in "
+            "on another device, session_ended otherwise."
+        ),
     )
     def post(self, request):
         raw = request.COOKIES.get(settings.AUTH_COOKIE_NAME)
         if not raw:
-            return Response(
-                {"detail": "Not signed in."}, status=status.HTTP_401_UNAUTHORIZED
-            )
+            return self.ended("Not signed in.", SESSION_ENDED)
         try:
             refresh, user = rotate_refresh(raw)
         except TokenError as exc:
-            response = Response(
-                {"detail": str(exc)}, status=status.HTTP_401_UNAUTHORIZED
-            )
-            return clear_refresh_cookie(response)
+            return clear_refresh_cookie(self.ended(str(exc), refusal_code(exc)))
 
         body = {"access": str(refresh.access_token), "user": MeSerializer(user).data}
         return set_refresh_cookie(Response(body), refresh)
+
+    @staticmethod
+    def ended(detail, code):
+        body = SessionEndedSerializer({"detail": detail, "code": code}).data
+        return Response(body, status=status.HTTP_401_UNAUTHORIZED)
 
 
 class LogoutView(APIView):
@@ -87,11 +97,12 @@ class LogoutView(APIView):
         raw = request.COOKIES.get(settings.AUTH_COOKIE_NAME)
         if raw:
             try:
-                from rest_framework_simplejwt.tokens import RefreshToken
-
-                RefreshToken(raw).blacklist()
+                token = RefreshToken(raw)
+                token.blacklist()
             except Exception:
                 pass  # already expired or invalid; clearing the cookie is enough
+            else:
+                end_session(token)  # its access token stops working too
         return clear_refresh_cookie(Response({"detail": "Signed out."}))
 
 
@@ -164,5 +175,6 @@ class UserViewSet(viewsets.ModelViewSet):
         password = make_initial_password()
         user.set_password(password)
         user.must_change_password = True
-        user.save(update_fields=["password", "must_change_password"])
+        user.current_session = None  # signed out wherever they are
+        user.save(update_fields=["password", "must_change_password", "current_session"])
         return Response({"initial_password": password})

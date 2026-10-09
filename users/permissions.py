@@ -1,4 +1,4 @@
-# v1.0.1 — role gates for endpoints.
+# v1.0.3 — role gates for endpoints.
 #
 # These gate *access*. They do not enforce business rules — the discount cap,
 # the no-selling-below-zero rule, the frozen-after-posting rule and so on live
@@ -30,7 +30,8 @@ class IsAdminOrReadOnly(BasePermission):
 
 
 class HasScope(BasePermission):
-    """Checks view.required_scope against the role's scope list."""
+    """Checks view.required_scope against the role's scope list; a tuple of
+    scopes lets in a user holding any one of them."""
 
     message = "Your role does not allow this."
 
@@ -38,15 +39,17 @@ class HasScope(BasePermission):
         scope = getattr(view, "required_scope", None)
         if scope is None:
             return True
+        scopes = (scope,) if isinstance(scope, str) else scope
         return bool(
             request.user
             and request.user.is_authenticated
-            and has_scope(request.user, scope)
+            and any(has_scope(request.user, s) for s in scopes)
         )
 
 
 class HasReadWriteScope(BasePermission):
-    """Reads need view.read_scope; anything else needs view.write_scope.
+    """Reads need view.read_scope; anything else needs view.write_scope. A
+    view that names a delete_scope needs that one for DELETE instead.
 
     Used for the stock area, so who may open it is decided by scopes.py rather
     than by a role check written into the view.
@@ -58,7 +61,12 @@ class HasReadWriteScope(BasePermission):
         user = request.user
         if not (user and user.is_authenticated):
             return False
-        scope = view.read_scope if request.method in SAFE_METHODS else view.write_scope
+        if request.method in SAFE_METHODS:
+            scope = view.read_scope
+        elif request.method == "DELETE" and getattr(view, "delete_scope", None):
+            scope = view.delete_scope
+        else:
+            scope = view.write_scope
         return has_scope(user, scope)
 
 

@@ -1,4 +1,4 @@
-# v1.0.1 — the rows the system assumes exist.
+# v1.0.2 — the rows the system assumes exist.
 #
 # Several rules depend on these: there must be an exchange rate before anything
 # can be priced in riel, and a document counter before anything can be numbered.
@@ -21,7 +21,6 @@ PREFIXES = {
     DocumentType.STOCK_IN: "GRN-",
     DocumentType.ADJUSTMENT: "ADJ-",
     DocumentType.COUNT: "CNT-",
-    DocumentType.WARRANTY: "WRC-",
     DocumentType.CUSTOMER: "CUS-",
     DocumentType.SUPPLIER: "SUP-",
 }

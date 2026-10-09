@@ -1,4 +1,4 @@
-# v1.0.1 — /api/sales/
+# v1.0.2 — /api/sales/
 from decimal import Decimal
 
 from django.db.models import Prefetch, Q
@@ -18,6 +18,7 @@ from sales.models import (
     CustomerPayment,
     Invoice,
     InvoiceLine,
+    InvoiceStatus,
     PaymentAllocation,
     Quotation,
     QuotationLine,
@@ -131,7 +132,9 @@ class QuotationViewSet(SalesViewSet):
 @extend_schema_view(
     list=extend_schema(parameters=list_filters(
         "HELD", "COMPLETED", "VOID",
-        extra=[query("seller", int, "Seller (user) id."), query("quotation", int, "Quotation id."), SEARCH],
+        extra=[query("seller", int, "Seller (user) id."), query("quotation", int, "Quotation id."), SEARCH,
+               flag("held", "false: leave out held sales, which have no number or date yet; "
+                            "true: held sales only.")],
     )),
     complete=extend_schema(request=CompleteSerializer, responses={200: InvoiceSerializer}),
     void=extend_schema(request=ReasonSerializer, responses={200: InvoiceSerializer}),
@@ -160,6 +163,10 @@ class InvoiceViewSet(SalesViewSet):
             qs = qs.filter(seller_id=p["seller"])
         if p.get("quotation"):
             qs = qs.filter(quotation_id=p["quotation"])
+        if p.get("held") == "false":
+            qs = qs.exclude(status=InvoiceStatus.HELD)
+        elif p.get("held") == "true":
+            qs = qs.filter(status=InvoiceStatus.HELD)
         if p.get("search"):
             qs = qs.filter(
                 Q(number__icontains=p["search"]) | Q(walk_in_name__icontains=p["search"])

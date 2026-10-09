@@ -1,4 +1,4 @@
-# v1.0.1 — the inventory rules that matter
+# v1.4.0 — the inventory rules that matter
 import io
 from datetime import timedelta
 from decimal import Decimal as D
@@ -13,13 +13,14 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from catalogue.models import Category, Product, Unit
+from catalogue.models import Brand, Category, Product, Unit
 from core.exceptions import DomainError, InsufficientStockError, PostedDocumentError
 from inventory.models import (
     Adjustment,
     AdjustmentLine,
     AdjustmentReason as R,
     DocStatus,
+    StockCount,
     StockIn,
     StockInLine,
     StockMovement,
@@ -363,8 +364,11 @@ class InventoryApiTests(InventoryTestCase):
         doc.refresh_from_db()
         self.assertEqual(doc.status, DocStatus.DRAFT)
 
-    def test_pack_size_defaults_from_the_supplier_link(self):
-        ProductSupplier.objects.create(product=self.screw, supplier=self.supplier, pack_size=D("24"))
+    def test_the_pack_defaults_from_the_supplier_link(self):
+        ProductSupplier.objects.create(
+            product=self.screw, supplier=self.supplier,
+            pack_unit=Unit.objects.get(code="CTN"), pack_size=D("24"),
+        )
         self._as(self.admin, "owner-pass-99")
         res = self.client.post("/api/inventory/stock-ins/", {
             "supplier": self.supplier.pk,
@@ -372,7 +376,58 @@ class InventoryApiTests(InventoryTestCase):
         }, format="json")
         self.assertEqual(res.status_code, 201, res.data)
         line = res.data["lines"][0]
-        self.assertEqual((line["pack_size"], line["quantity"], line["unit_cost"]), ("24.00", "48.00", "1.1000"))
+        self.assertEqual(
+            (line["pack_unit_name"], line["pack_size"], line["quantity"], line["unit_cost"]),
+            ("Carton", "24.00", "48.00", "1.1000"),
+        )
+
+    def test_a_line_that_gives_its_pack_keeps_it(self):
+        ProductSupplier.objects.create(
+            product=self.screw, supplier=self.supplier,
+            pack_unit=Unit.objects.get(code="CTN"), pack_size=D("24"),
+        )
+        self._as(self.admin, "owner-pass-99")
+        res = self.client.post("/api/inventory/stock-ins/", {
+            "supplier": self.supplier.pk,
+            "lines": [{"product": self.screw.pk, "pack_unit": None, "pack_size": "1",
+                       "packs": "5", "pack_cost": "1.15"}],
+        }, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        line = res.data["lines"][0]
+        self.assertEqual((line["pack_unit"], line["pack_size"], line["quantity"]), (None, "1.00", "5.00"))
+
+    def test_each_line_names_its_brand_and_category(self):
+        Product.objects.filter(pk=self.spanner.pk).update(brand=Brand.objects.create(name="Total"))
+        self.stock_in((self.spanner, "10", "1.85"))
+        self._as(self.admin, "owner-pass-99")
+        named = lambda lines: [  # noqa: E731
+            (l["product_code"], l["brand_name"], l["category_name"]) for l in lines
+        ]
+        doc = self.stock_in((self.spanner, "2", "1.85"), (self.screw, "1", "2.00"), post=False)
+        self.assertEqual(
+            named(self.client.get(f"/api/inventory/stock-ins/{doc.pk}/").data["lines"]),
+            [("TL-0240", "Total", "Wrenches"), ("FX-0302", None, "Fixings")],
+        )
+        doc = self.adjust(R.DAMAGE, (self.spanner, "1"), post=False)
+        self.assertEqual(
+            named(self.client.get(f"/api/inventory/adjustments/{doc.pk}/").data["lines"]),
+            [("TL-0240", "Total", "Wrenches")],
+        )
+        res = self.client.post("/api/inventory/counts/", {"category": self.wrenches.pk}, format="json")
+        self.assertEqual(
+            sorted(named(res.data["lines"])),
+            [("TL-0240", "Total", "Wrenches"), ("TL-0241", None, "Wrenches")],
+        )
+
+    def test_an_adjustment_totals_its_value_once_posted(self):
+        self.stock_in((self.spanner, "10", "1.85"))
+        doc = self.adjust(R.DAMAGE, (self.spanner, "2"), post=False)
+        self._as(self.admin, "owner-pass-99")
+        url = f"/api/inventory/adjustments/{doc.pk}/"
+        self.assertIsNone(self.client.get(url).data["total"])
+        res = self.client.post(url + "post/")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["total"], "-3.70")
 
     def test_the_api_refuses_a_typed_cost_on_a_write_off(self):
         self._as(self.admin, "owner-pass-99")
@@ -396,10 +451,14 @@ class InventoryApiTests(InventoryTestCase):
         self.assertEqual(res.data["lines_counted"], 1)
         self.assertTrue(all(l["expected_qty"] is None and l["difference"] is None for l in res.data["lines"]))
 
+        self.assertIsNone(res.data["differences"])
+        self.assertIsNone(res.data["total"])
+
         res = self.client.post(url + "post/")
         self.assertEqual(res.status_code, 200, res.data)
         counted = next(l for l in res.data["lines"] if l["product"] == self.spanner.pk)
         self.assertEqual((counted["expected_qty"], counted["difference"]), ("10.00", "-1.00"))
+        self.assertEqual((res.data["differences"], res.data["total"]), (1, "-1.00"))
 
     def test_the_movement_list_is_a_stock_card(self):
         self.stock_in((self.spanner, "10", "1.00"))
@@ -418,6 +477,56 @@ class InventoryApiTests(InventoryTestCase):
         self.assertEqual(res.status_code, 201, res.data)
         self.assertEqual(res.data["reverses_number"], doc.number)
         self.assertEqual(self.position(self.spanner)[0], D("0"))
+
+    def test_a_reversed_stock_in_is_sent_the_way_the_goods_went(self):
+        doc = self.stock_in((self.spanner, "10", "1.85"))
+        self._as(self.admin, "owner-pass-99")
+        res = self.client.post(f"/api/inventory/stock-ins/{doc.pk}/reverse/", {"note": "Keyed twice"}, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        line = res.data["lines"][0]
+        self.assertEqual(res.data["total"], "-18.50")
+        self.assertEqual((line["quantity"], line["line_total"]), ("-10.00", "-18.50"))
+        # What was typed is sent as stored.
+        self.assertEqual((line["packs"], line["pack_cost"]), ("10.00", "1.8500"))
+        # The original is untouched.
+        self.assertEqual(self.client.get(f"/api/inventory/stock-ins/{doc.pk}/").data["total"], "18.50")
+
+    def test_a_reversed_write_off_comes_back_in(self):
+        self.stock_in((self.spanner, "10", "1.85"))
+        doc = self.adjust(R.DAMAGE, (self.spanner, "2"))
+        self._as(self.admin, "owner-pass-99")
+        res = self.client.post(f"/api/inventory/adjustments/{doc.pk}/reverse/", {"note": "Not damaged"}, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual((res.data["direction"], res.data["total"]), ("IN", "3.70"))
+        self.assertEqual((res.data["lines"][0]["quantity"], res.data["lines"][0]["value"]), ("2.00", "3.70"))
+        original = self.client.get(f"/api/inventory/adjustments/{doc.pk}/").data
+        self.assertEqual((original["direction"], original["total"]), ("OUT", "-3.70"))
+
+    def test_a_reversed_count_undoes_each_difference(self):
+        self.stock_in((self.spanner, "10", "1.85"))
+        self._as(self.admin, "owner-pass-99")
+        res = self.client.post("/api/inventory/counts/", {"category": self.wrenches.pk}, format="json")
+        url = f"/api/inventory/counts/{res.data['id']}/"
+        ids = {l["product"]: l["id"] for l in res.data["lines"]}
+        self.client.post(url + "record/", {"lines": [
+            {"line": ids[self.spanner.pk], "counted_qty": "9"},
+            {"line": ids[self.spanner_set.pk], "counted_qty": "0"},
+        ]}, format="json")
+        self.assertEqual(self.client.post(url + "post/").status_code, 200)
+
+        res = self.client.post(url + "reverse/", {"note": "Wrong shelf"}, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        lines = {l["product"]: l for l in res.data["lines"]}
+        short = lines[self.spanner.pk]
+        # Counted and expected swap, so counted − expected is still the difference.
+        self.assertEqual(
+            (short["counted_qty"], short["expected_qty"], short["difference"], short["value"]),
+            ("10.00", "9.00", "1.00", "1.85"),
+        )
+        self.assertEqual((lines[self.spanner_set.pk]["difference"], lines[self.spanner_set.pk]["value"]), ("0.00", "0.00"))
+        self.assertEqual((res.data["differences"], res.data["total"]), (1, "1.85"))
+        original = self.client.get(url).data
+        self.assertEqual(original["total"], "-1.85")
 
     def test_a_product_with_stock_history_keeps_tracking_stock(self):
         self.stock_in((self.spanner, "1", "1"))
@@ -486,6 +595,17 @@ class ImportTests(InventoryTestCase):
         self.assertEqual((line.packs, line.pack_size, line.quantity, line.unit_cost), (D("2"), D("24"), D("48"), D("1.1")))
         self.assertEqual(line.pack_unit.code, "CTN")
 
+    def test_rows_without_pack_columns_take_the_supplier_link(self):
+        ProductSupplier.objects.create(
+            product=self.screw, supplier=self.supplier,
+            pack_unit=Unit.objects.get(code="CTN"), pack_size=D("24"),
+        )
+        doc = self.stock_in(post=False)
+        res = self.upload(doc, "code,quantity,unit_cost\nFX-0302,2,26.40\n", commit="true")
+        self.assertEqual(res.data["imported"], 1)
+        line = doc.lines.get()
+        self.assertEqual((line.pack_unit.code, line.pack_size, line.quantity), ("CTN", D("24"), D("48")))
+
     def test_opening_balance_import_flags_products_the_ledger_has_moved(self):
         self.stock_in((self.spanner, "1", "1"))
         doc = self.adjust(R.OPENING_BALANCE, post=False)
@@ -504,3 +624,77 @@ class ImportTests(InventoryTestCase):
         doc = self.stock_in(post=False)
         res = self.upload(doc, b"nonsense", name="lines.pdf")
         self.assertEqual(res.status_code, 400)
+
+
+class SeedStockDemoTests(TestCase):
+    """The sample history goes through the real services and agrees with the ledger."""
+
+    def setUp(self):
+        call_command("seed", stdout=StringIO())
+        call_command("seed_demo", stdout=StringIO())
+        User.objects.create_user(
+            username="owner", password="owner-pass-99", full_name="Bopha Ly", role=Role.ADMIN,
+        )
+        self.since = timezone.localdate() - timedelta(days=45)
+
+    def load(self, *extra):
+        call_command(
+            "seed_stock_demo", "--user", "owner", "--since", self.since.isoformat(), *extra,
+            stdout=StringIO(),
+        )
+
+    def test_a_history_that_agrees_with_the_ledger(self):
+        self.load()
+        ins = StockIn.objects.filter(status=DocStatus.POSTED)
+        self.assertGreaterEqual(ins.filter(reverses=None).count(), 10)
+        self.assertEqual(ins.exclude(reverses=None).count(), 1)
+        self.assertEqual(StockIn.objects.filter(status=DocStatus.DRAFT).count(), 1)
+        reasons = set(
+            Adjustment.objects.filter(status=DocStatus.POSTED).values_list("reason", flat=True)
+        )
+        self.assertLessEqual(
+            {R.OPENING_BALANCE, R.DAMAGE, R.SHOP_USE, R.RETURN_TO_SUPPLIER, R.LOSS,
+             R.SUPPLIER_REPLACEMENT},
+            reasons,
+        )
+        self.assertEqual(Adjustment.objects.filter(status=DocStatus.DRAFT).count(), 1)
+        self.assertGreaterEqual(StockCount.objects.filter(status=DocStatus.POSTED).count(), 1)
+        self.assertEqual(StockCount.objects.filter(status=DocStatus.DRAFT).count(), 1)
+
+        stocked = Product.objects.filter(track_stock=True, is_active=True)
+        self.assertFalse(stocked.filter(movements__isnull=True).exists())
+        self.assertFalse(Product.objects.filter(qty_on_hand__lt=0).exists())
+        call_command("recompute_stock", "--check", stdout=StringIO())  # raises on any drift
+
+        # Each document is stamped on its own date, and numbered in date order.
+        for model in (StockIn, Adjustment, StockCount):
+            docs = list(model.objects.order_by("number"))
+            for doc in docs:
+                self.assertEqual(timezone.localdate(doc.created_at), doc.doc_date, doc.number)
+            dates = [doc.doc_date for doc in docs]
+            self.assertEqual(dates, sorted(dates), model.__name__)
+        # The ledger runs in date order across documents, so a month-end count
+        # read the stock as it stood that day.
+        moved = list(StockMovement.objects.order_by("id").values_list("movement_date", flat=True))
+        self.assertEqual(moved, sorted(moved))
+
+    def test_it_never_loads_over_stock_records(self):
+        self.load()
+        with self.assertRaises(CommandError):
+            self.load()
+
+    def test_reset_loads_the_same_again_but_not_once_there_are_sales(self):
+        self.load()
+        first = list(StockIn.objects.order_by("id").values_list("number", "doc_date", "supplier_ref"))
+        self.load("--reset")
+        again = list(StockIn.objects.order_by("id").values_list("number", "doc_date", "supplier_ref"))
+        self.assertEqual(again, first)
+
+        from partners.models import Customer
+        from sales.models import Invoice, InvoiceStatus
+
+        Invoice.objects.create(
+            customer=Customer.walk_in(), status=InvoiceStatus.COMPLETED, number="INV-TEST-001",
+        )
+        with self.assertRaises(CommandError):
+            self.load("--reset")

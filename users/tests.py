@@ -1,4 +1,4 @@
-# v1.0.1 — the auth rules that matter, tested
+# v1.0.4 — the auth rules that matter, tested
 import time
 from datetime import timedelta
 
@@ -98,6 +98,78 @@ class AuthFlowTests(TestCase):
         self.assertNotIn("stock.post", res.data["scopes"])
 
 
+class SingleSessionTests(TestCase):
+    """One session per user: the latest sign-in wins. Each APIClient keeps its
+    own cookies, so each stands for one device."""
+
+    def setUp(self):
+        self.seller = User.objects.create_user(
+            username="sokha", password="counter-pass-99", full_name="Sokha Chan",
+            role=Role.SELLER,
+        )
+
+    def sign_in(self):
+        device = APIClient()
+        login = device.post(
+            reverse("auth-login"),
+            {"username": "sokha", "password": "counter-pass-99"},
+            format="json",
+        )
+        device.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return device
+
+    def test_a_new_sign_in_ends_the_earlier_one_at_its_next_click(self):
+        till = self.sign_in()
+        office = self.sign_in()
+
+        res = till.get(reverse("auth-me"))
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.data["code"], "session_replaced")
+
+        res = till.post(reverse("auth-refresh"))
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.data["code"], "session_replaced")
+        self.assertEqual(res.cookies[settings.AUTH_COOKIE_NAME].value, "")
+
+        self.assertEqual(office.get(reverse("auth-me")).status_code, 200)
+        self.assertEqual(office.post(reverse("auth-refresh")).status_code, 200)
+
+    def test_a_session_keeps_going_through_its_own_refreshes(self):
+        till = self.sign_in()
+        for _ in range(2):
+            res = till.post(reverse("auth-refresh"))
+            self.assertEqual(res.status_code, 200)
+            till.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['access']}")
+            self.assertEqual(till.get(reverse("auth-me")).status_code, 200)
+
+    def test_an_earlier_device_signing_out_leaves_the_new_one_alone(self):
+        till = self.sign_in()
+        office = self.sign_in()
+        self.assertEqual(till.post(reverse("auth-logout")).status_code, 200)
+
+        self.assertEqual(office.get(reverse("auth-me")).status_code, 200)
+        self.assertEqual(office.post(reverse("auth-refresh")).status_code, 200)
+
+    def test_signing_out_ends_the_access_token_too(self):
+        till = self.sign_in()
+        till.post(reverse("auth-logout"))
+        res = till.get(reverse("auth-me"))
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.data["code"], "session_ended")
+
+    def test_a_token_from_before_sessions_is_refused(self):
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        old = RefreshToken.for_user(self.seller)   # no sid, as issued before
+        old["auth_time"] = int(time.time())
+        device = APIClient()
+        device.credentials(HTTP_AUTHORIZATION=f"Bearer {old.access_token}")
+        self.assertEqual(device.get(reverse("auth-me")).status_code, 401)
+
+        device.cookies[settings.AUTH_COOKIE_NAME] = str(old)
+        self.assertEqual(device.post(reverse("auth-refresh")).status_code, 401)
+
+
 class RoleScopeTests(TestCase):
     def setUp(self):
         self.admin = User.objects.create_user(
@@ -122,6 +194,15 @@ class RoleScopeTests(TestCase):
         self.assertTrue(has_scope(self.seller, "invoice.void.own"))
         self.assertFalse(has_scope(self.seller, "invoice.void.any"))
         self.assertTrue(has_scope(self.admin, "invoice.void.any"))
+
+    def test_only_an_admin_voids_a_payment(self):
+        self.assertTrue(has_scope(self.admin, "payment.void"))
+        self.assertFalse(has_scope(self.seller, "payment.void"))
+
+    def test_only_an_admin_deletes_a_warranty_claim(self):
+        self.assertTrue(has_scope(self.admin, "warranty.delete"))
+        self.assertFalse(has_scope(self.seller, "warranty.delete"))
+        self.assertTrue(has_scope(self.seller, "warranty.edit"))
 
     def test_only_admin_manages_users(self):
         client = APIClient()
@@ -252,6 +333,27 @@ class UserCreationTests(TestCase):
         seller.refresh_from_db()
         self.assertTrue(seller.check_password(res.data["initial_password"]))
         self.assertTrue(seller.must_change_password)
+
+    def test_reset_password_signs_the_user_out(self):
+        User.objects.create_user(
+            username="dara5", password="old-pass-9999", full_name="Dara Meas",
+        )
+        till = APIClient()
+        login = till.post(
+            reverse("auth-login"),
+            {"username": "dara5", "password": "old-pass-9999"},
+            format="json",
+        )
+        till.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        self.assertEqual(till.get(reverse("auth-me")).status_code, 200)
+
+        seller = User.objects.get(username="dara5")
+        self.client.post(f"/api/users/{seller.pk}/reset-password/")
+
+        res = till.get(reverse("auth-me"))
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.data["code"], "session_ended")
+        self.assertEqual(till.post(reverse("auth-refresh")).status_code, 401)
 
     def test_changing_password_clears_the_must_change_flag(self):
         seller = User.objects.create_user(

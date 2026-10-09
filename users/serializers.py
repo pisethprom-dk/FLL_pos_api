@@ -1,4 +1,4 @@
-# v1.0.2
+# v1.0.3
 from django.contrib.auth import authenticate, password_validation
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
@@ -69,6 +69,14 @@ class SessionSerializer(serializers.Serializer):
 
     access = serializers.CharField()
     user = MeSerializer()
+
+
+class SessionEndedSerializer(serializers.Serializer):
+    """A refused refresh. `code` is session_replaced when the user has since
+    signed in on another device, session_ended for any other reason."""
+
+    detail = serializers.CharField()
+    code = serializers.CharField()
 
 
 class InitialPasswordSerializer(serializers.Serializer):

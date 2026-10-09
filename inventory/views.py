@@ -1,4 +1,4 @@
-# v1.0.1 — /api/inventory/. The whole stock area is Admin only, via scopes.
+# v1.0.2 — /api/inventory/. The whole stock area is Admin only, via scopes.
 from django.db.models import Prefetch, Q
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
@@ -142,7 +142,9 @@ class ImportMixin:
 @document_schema(StockInSerializer, [SUPPLIER])
 class StockInViewSet(ImportMixin, DocumentViewSet):
     queryset = StockIn.objects.select_related("supplier").prefetch_related(
-        Prefetch("lines", StockInLine.objects.select_related("product__unit", "pack_unit"))
+        Prefetch("lines", StockInLine.objects.select_related(
+            "product__unit", "product__brand", "product__category", "pack_unit"
+        ))
     )
     serializer_class = StockInSerializer
     post_service = post_stock_in
@@ -163,7 +165,7 @@ class StockInViewSet(ImportMixin, DocumentViewSet):
 ])
 class AdjustmentViewSet(ImportMixin, DocumentViewSet):
     queryset = Adjustment.objects.select_related("supplier").prefetch_related(
-        Prefetch("lines", AdjustmentLine.objects.select_related("product"))
+        Prefetch("lines", AdjustmentLine.objects.select_related("product__brand", "product__category"))
     )
     serializer_class = AdjustmentSerializer
     post_service = post_adjustment
@@ -187,7 +189,9 @@ class StockCountViewSet(DocumentViewSet):
     queryset = StockCount.objects.select_related("category__parent", "counted_by").prefetch_related(
         Prefetch(
             "lines",
-            StockCountLine.objects.select_related("product__unit", "document"),
+            StockCountLine.objects.select_related(
+                "product__unit", "product__brand", "product__category", "document"
+            ),
         )
     )
     serializer_class = StockCountSerializer

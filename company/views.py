@@ -1,13 +1,14 @@
-# v1.0.1
+# v1.0.2
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from company.currency import BASE_CURRENCY, DECIMALS, NOTES, ROUNDING_STEP, SYMBOL
 from company.models import CompanyProfile, DocumentCounter, ExchangeRate, PaymentNote
 from company.serializers import (
+    CompanyBrandSerializer,
     CompanyProfileSerializer,
     CurrentRateSerializer,
     DocumentCounterSerializer,
@@ -17,6 +18,21 @@ from company.serializers import (
 from company.services import current_rate
 from core.schema import ACTIVE
 from users.permissions import IsAdmin, IsAdminOrReadOnly
+
+
+class CompanyBrandView(APIView):
+    """The shop's name, Khmer name, address and logo for the sign-in page.
+
+    Public and read-only. No authentication runs, so a stale token left in a
+    browser cannot turn this into a 401 on the page where the user signs in.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @extend_schema(responses={200: CompanyBrandSerializer})
+    def get(self, request):
+        return Response(CompanyBrandSerializer(CompanyProfile.get()).data)
 
 
 class CompanyProfileView(APIView):

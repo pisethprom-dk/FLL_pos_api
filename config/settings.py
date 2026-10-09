@@ -1,4 +1,4 @@
-# v1.0.5 — POS backend settings
+# v1.1.0 — POS backend settings
 from datetime import timedelta
 from pathlib import Path
 
@@ -9,14 +9,30 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env(
     DEBUG=(bool, False),
     ALLOWED_HOSTS=(list, ["localhost", "127.0.0.1"]),
+    CSRF_TRUSTED_ORIGINS=(list, []),
     CORS_ALLOWED_ORIGINS=(list, []),
     AUTH_COOKIE_SECURE=(bool, True),
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
-SECRET_KEY = env("SECRET_KEY", default="insecure-dev-key")
 DEBUG = env("DEBUG")
+
+# Production (DEBUG off) refuses to start without these; development falls
+# back to what docker-compose runs. SECRET_KEY also signs every JWT.
+_REQUIRED = environ.Env.NOTSET
+SECRET_KEY = env("SECRET_KEY", default="insecure-dev-key" if DEBUG else _REQUIRED)
+_DEV_DATABASE_URL = "postgres://pos:pos@db:5432/pos"
+
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
+# The Django admin's login form; the API runs on JWT and needs no CSRF.
+CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
+
+# nginx terminates TLS and sets X-Forwarded-Proto itself, overwriting any a
+# client sent (deploy/nginx/pos.conf), so Django may trust it.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# The Django admin's cookies; the refresh cookie follows AUTH_COOKIE_SECURE.
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -36,6 +52,8 @@ INSTALLED_APPS = [
     "partners",
     "inventory",
     "sales",
+    "warranty",
+    "reports",
 ]
 
 MIDDLEWARE = [
@@ -68,15 +86,9 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
+# postgres://user:password@host:5432/name
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": env("POSTGRES_DB", default="pos"),
-        "USER": env("POSTGRES_USER", default="pos"),
-        "PASSWORD": env("POSTGRES_PASSWORD", default="pos"),
-        "HOST": env("POSTGRES_HOST", default="db"),
-        "PORT": env("POSTGRES_PORT", default="5432"),
-    }
+    "default": env.db("DATABASE_URL", default=_DEV_DATABASE_URL if DEBUG else _REQUIRED),
 }
 
 AUTH_USER_MODEL = "users.User"
@@ -104,7 +116,8 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # JWT, refused once the user has signed in on another device
+        "users.authentication.SessionJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -154,5 +167,7 @@ SPECTACULAR_SETTINGS = {
         "PaymentStatusEnum": "sales.models.PaymentStatus",
         "TenderKindEnum": "sales.money.TENDER_KINDS",
         "PaymentTenderEnum": "sales.models.PaymentTender",
+        "ClaimStatusEnum": "warranty.models.ClaimStatus",
+        "StockStatusEnum": "reports.services.StockStatus",
     },
 }

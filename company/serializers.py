@@ -1,4 +1,4 @@
-# v1.0.1
+# v1.0.3
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -13,9 +13,23 @@ class CompanyProfileSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
+class CompanyBrandSerializer(serializers.ModelSerializer):
+    """What the sign-in page may show before anyone signs in: what is printed on
+    every receipt anyway, and nothing else."""
+
+    class Meta:
+        model = CompanyProfile
+        fields = ["name", "name_kh", "address", "logo"]
+        read_only_fields = fields
+
+
 class ExchangeRateSerializer(serializers.ModelSerializer):
     is_in_use = serializers.SerializerMethodField()
-    set_by = serializers.CharField(source="created_by.full_name", read_only=True)
+    # A rate nobody set (seed's opening rate) has no created_by: send null rather
+    # than leaving the field out, so the schema — and the Angular type — stay true.
+    set_by = serializers.CharField(
+        source="created_by.full_name", read_only=True, default=None, allow_null=True
+    )
 
     class Meta:
         model = ExchangeRate
