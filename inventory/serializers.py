@@ -1,4 +1,4 @@
-# v1.2.0
+# v1.3.0
 from decimal import Decimal
 
 from django.db import transaction
@@ -122,14 +122,16 @@ class DocumentSerializer(serializers.ModelSerializer):
 class StockInLineSerializer(serializers.ModelSerializer):
     product_code = serializers.CharField(source="product.code", read_only=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
+    brand_name = serializers.CharField(source="product.brand.name", read_only=True, default=None, allow_null=True)
+    category_name = serializers.CharField(source="product.category.name", read_only=True)
     unit_name = serializers.CharField(source="product.unit.name", read_only=True)
     pack_unit_name = serializers.CharField(source="pack_unit.name", read_only=True, default=None, allow_null=True)
 
     class Meta:
         model = StockInLine
         fields = [
-            "id", "product", "product_code", "product_name", "unit_name",
-            "pack_unit", "pack_unit_name", "packs", "pack_size", "pack_cost",
+            "id", "product", "product_code", "product_name", "brand_name", "category_name",
+            "unit_name", "pack_unit", "pack_unit_name", "packs", "pack_size", "pack_cost",
             "quantity", "unit_cost", "line_total",
         ]
         extra_kwargs = {"pack_size": {"required": False}}
@@ -183,6 +185,8 @@ class StockInSerializer(DocumentSerializer):
 class AdjustmentLineSerializer(serializers.ModelSerializer):
     product_code = serializers.CharField(source="product.code", read_only=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
+    brand_name = serializers.CharField(source="product.brand.name", read_only=True, default=None, allow_null=True)
+    category_name = serializers.CharField(source="product.category.name", read_only=True)
     shelf_location = serializers.CharField(source="product.shelf_location", read_only=True)
     on_hand = serializers.DecimalField(
         source="product.qty_on_hand", max_digits=12, decimal_places=2, read_only=True
@@ -194,8 +198,8 @@ class AdjustmentLineSerializer(serializers.ModelSerializer):
     class Meta:
         model = AdjustmentLine
         fields = [
-            "id", "product", "product_code", "product_name", "shelf_location",
-            "on_hand", "current_avg_cost", "quantity", "unit_cost", "value",
+            "id", "product", "product_code", "product_name", "brand_name", "category_name",
+            "shelf_location", "on_hand", "current_avg_cost", "quantity", "unit_cost", "value",
         ]
 
 
@@ -276,6 +280,8 @@ class StockCountLineSerializer(serializers.ModelSerializer):
 
     product_code = serializers.CharField(source="product.code", read_only=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
+    brand_name = serializers.CharField(source="product.brand.name", read_only=True, default=None, allow_null=True)
+    category_name = serializers.CharField(source="product.category.name", read_only=True)
     shelf_location = serializers.CharField(source="product.shelf_location", read_only=True)
     unit_name = serializers.CharField(source="product.unit.name", read_only=True)
 
@@ -285,8 +291,8 @@ class StockCountLineSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockCountLine
         fields = [
-            "id", "product", "product_code", "product_name", "shelf_location",
-            "unit_name", "counted_qty", "counted_at",
+            "id", "product", "product_code", "product_name", "brand_name", "category_name",
+            "shelf_location", "unit_name", "counted_qty", "counted_at",
             "expected_qty", "difference", "unit_cost", "value",
         ]
         read_only_fields = fields

@@ -1,4 +1,4 @@
-# v1.0.3 — the catalogue rules that matter
+# v1.0.4 — the catalogue rules that matter
 from decimal import Decimal
 from io import StringIO
 
@@ -216,6 +216,8 @@ class CatalogueApiTests(TestCase):
         self.assertIn("shelf_location", row)
         # A warranty claim picked from the catalogue takes its duration.
         self.assertIn("warranty_months", row)
+        # A stock document's line shows the category's own name, not its group.
+        self.assertEqual(row["category_name"], Product.objects.get(pk=row["id"]).category.name)
         self.assertNotIn("description", row)
 
 

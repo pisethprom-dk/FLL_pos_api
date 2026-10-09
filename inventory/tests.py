@@ -1,4 +1,4 @@
-# v1.3.0 — the inventory rules that matter
+# v1.4.0 — the inventory rules that matter
 import io
 from datetime import timedelta
 from decimal import Decimal as D
@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from catalogue.models import Category, Product, Unit
+from catalogue.models import Brand, Category, Product, Unit
 from core.exceptions import DomainError, InsufficientStockError, PostedDocumentError
 from inventory.models import (
     Adjustment,
@@ -395,6 +395,29 @@ class InventoryApiTests(InventoryTestCase):
         self.assertEqual(res.status_code, 201, res.data)
         line = res.data["lines"][0]
         self.assertEqual((line["pack_unit"], line["pack_size"], line["quantity"]), (None, "1.00", "5.00"))
+
+    def test_each_line_names_its_brand_and_category(self):
+        Product.objects.filter(pk=self.spanner.pk).update(brand=Brand.objects.create(name="Total"))
+        self.stock_in((self.spanner, "10", "1.85"))
+        self._as(self.admin, "owner-pass-99")
+        named = lambda lines: [  # noqa: E731
+            (l["product_code"], l["brand_name"], l["category_name"]) for l in lines
+        ]
+        doc = self.stock_in((self.spanner, "2", "1.85"), (self.screw, "1", "2.00"), post=False)
+        self.assertEqual(
+            named(self.client.get(f"/api/inventory/stock-ins/{doc.pk}/").data["lines"]),
+            [("TL-0240", "Total", "Wrenches"), ("FX-0302", None, "Fixings")],
+        )
+        doc = self.adjust(R.DAMAGE, (self.spanner, "1"), post=False)
+        self.assertEqual(
+            named(self.client.get(f"/api/inventory/adjustments/{doc.pk}/").data["lines"]),
+            [("TL-0240", "Total", "Wrenches")],
+        )
+        res = self.client.post("/api/inventory/counts/", {"category": self.wrenches.pk}, format="json")
+        self.assertEqual(
+            sorted(named(res.data["lines"])),
+            [("TL-0240", "Total", "Wrenches"), ("TL-0241", None, "Wrenches")],
+        )
 
     def test_an_adjustment_totals_its_value_once_posted(self):
         self.stock_in((self.spanner, "10", "1.85"))

@@ -1,4 +1,4 @@
-<!-- v1.4.9 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
+<!-- v1.4.10 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
 # POS — tool shop, single outlet
 
 Back office for one hardware shop in Phnom Penh. Prices in US dollars, takes
@@ -123,7 +123,7 @@ container but `docker compose logs web` keeps its output.
 | — | `warranty` | Done — the warranty claims log (added 2026-10-06, with the frontend's step 5c-5) |
 | 6 | `reports` | Done (2026-10-07): daily sales, stock on hand, receivables, the dashboard |
 
-254 tests passing.
+255 tests passing.
 
 **Inventory must come before sales.** A sale decrements stock and stamps a
 cost; both live in the movement ledger. Building sales first means writing the
@@ -464,6 +464,11 @@ cost. Refused once the stock has gone, for a reversal, or a second time.
   `direction` (a damage reversal reads IN); a count's total, differences and
   values, with counted and expected swapped so counted − expected still equals
   the difference. What was typed is sent as stored; the ledger is untouched.
+
+- Each stock-in, adjustment and count line sends its product's
+  `brand_name` (null without one) and `category_name` (the category's own
+  name, not "group → name"); the product lookup sends `category_name` too
+  (2026-10-09, for the lines' brand · category on screen).
 
 **Import.** `POST .../{id}/import/` with a CSV or .xlsx file. `commit=false`
 checks every row (Matched / No such code / Cost missing / …) and adds nothing;

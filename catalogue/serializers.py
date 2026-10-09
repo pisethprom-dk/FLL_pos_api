@@ -1,4 +1,4 @@
-# v1.0.4
+# v1.0.5
 from rest_framework import serializers
 
 from catalogue.models import Brand, Category, Product, Unit
@@ -122,13 +122,14 @@ class ProductLookupSerializer(serializers.ModelSerializer):
     """Small payload for the till and the stock document line pickers."""
 
     brand_name = serializers.CharField(source="brand.name", read_only=True, default=None, allow_null=True)
+    category_name = serializers.CharField(source="category.name", read_only=True)
     unit_name = serializers.CharField(source="unit.name", read_only=True)
 
     class Meta:
         model = Product
         fields = [
             "id", "code", "barcode", "name", "short_name", "model_no",
-            "brand_name", "unit_name", "shelf_location",
+            "brand_name", "category_name", "unit_name", "shelf_location",
             "retail_price", "wholesale_price", "is_price_fixed",
             "track_stock", "qty_on_hand", "warranty_months",
         ]
