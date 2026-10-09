@@ -1,0 +1,58 @@
+# v1.0.0 — production stack on one EC2: Postgres + Django under gunicorn.
+#
+# nginx runs on the host (deploy/nginx/pos.conf): it terminates TLS, serves the
+# Angular build, /static/ and /media/, and proxies /api/ and /admin/ to
+# 127.0.0.1:8000. Stand-alone on purpose — nothing from the development file
+# (source mounted, runserver, Postgres published on 5432) carries over.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Steps and the .env it needs: deploy/README.md.
+name: pos-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No ports: only the web container reaches it.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    # The entrypoint waits for Postgres and migrates first.
+    command: >
+      sh -c "python manage.py collectstatic --noinput
+      && exec gunicorn config.wsgi:application --bind 0.0.0.0:8000
+      --workers $${GUNICORN_WORKERS:-3} --timeout 60 --access-logfile -"
+    ports:
+      - "127.0.0.1:8000:8000"   # the host's nginx only, never the internet
+    volumes:
+      # On the host, where nginx reads them (a home directory is closed to it).
+      - /srv/pos/static:/app/staticfiles
+      - /srv/pos/media:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *logging
+
+volumes:
+  pgdata:

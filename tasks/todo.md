@@ -1,4 +1,4 @@
-<!-- v1.0.2 -->
+<!-- v1.2.0 -->
 # One session per user — latest login wins
 
 **Asked (2026-10-08):** a user may be signed in in one place only. A new
@@ -90,3 +90,126 @@ autoreloader had stopped on a half-saved file).
 
 **Still to do:** the frontend message. The refresh 401 is now typed
 `SessionEnded` in the schema, so the API client needs regenerating there.
+
+---
+
+# Deploy config for EC2
+
+**Asked (2026-10-09):** settings from env vars (`SECRET_KEY`, `DEBUG=0`,
+`ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, database from `DATABASE_URL`),
+`STATIC_ROOT` / `MEDIA_ROOT`, `SECURE_PROXY_SSL_HEADER` because nginx
+terminates TLS, gunicorn and psycopg in requirements.
+
+## Already in place — no change
+
+- `SECRET_KEY`, `DEBUG` (off by default; `DEBUG=0` reads as off) and
+  `ALLOWED_HOSTS` come from env — `config/settings.py:9-19`.
+- `STATIC_ROOT = BASE_DIR / "staticfiles"`, `MEDIA_ROOT = BASE_DIR / "media"`
+  — `config/settings.py:101-103`.
+- `gunicorn==23.0.0`, `psycopg[binary]==3.2.4` — `requirements.txt`.
+
+## Approach
+
+Production refuses to start without what it must have; development keeps
+working with no change to anyone's `.env`.
+
+- **`SECRET_KEY`** required when `DEBUG` is off. Today it falls back to
+  `"insecure-dev-key"` silently — and that key signs every JWT.
+- **`DATABASE_URL`** via `env.db()` (django-environ, already installed).
+  Required when `DEBUG` is off; in development it defaults to
+  `postgres://pos:pos@db:5432/pos`, what docker-compose already runs.
+  `POSTGRES_*` stay in `.env` only for the Postgres container itself.
+- **`CSRF_TRUSTED_ORIGINS`** from env, e.g. `https://pos.example.com`. The
+  API uses JWT and needs no CSRF; the Django admin's login form does.
+- **`SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")`**. Safe
+  only because nginx sets that header itself (`proxy_set_header
+  X-Forwarded-Proto $scheme;`), overwriting anything a client sends.
+- **Entrypoint** waits for the host and port in `DATABASE_URL`, not
+  `POSTGRES_HOST` (unset on RDS, so it would wait for `db` forever).
+
+## Owner's decisions (2026-10-09)
+
+1. Postgres runs in a container on the same EC2.
+2. Settings **and** the production run files.
+3. The Django admin's cookies are Secure when `DEBUG` is off.
+4. nginx on the host, with certbot.
+5. `/api/docs/` and `/api/schema/` hidden in production (nginx 404); still
+   there locally to generate the Angular client.
+
+## Production layout (one EC2, Ubuntu)
+
+```
+internet ─443─▶ nginx (on the host, certbot TLS)
+                 ├─ /            Angular build   /var/www/pos
+                 ├─ /static/     collectstatic   /srv/pos/static
+                 ├─ /media/      uploads         /srv/pos/media
+                 └─ /api/ /admin/ ─▶ 127.0.0.1:8000 gunicorn (web container)
+                                                   └─▶ db container (not published)
+```
+
+- **nginx on the host**, not in a container: `certbot --nginx` then gets and
+  renews the certificate by itself, and adds the HTTPS block and the
+  http→https redirect. The shipped site file is plain HTTP for that reason.
+- **Production compose** (`docker-compose.prod.yml`, stand-alone so nothing
+  from the dev file leaks in): `restart: unless-stopped`; Postgres with no
+  published port; web runs `collectstatic` then gunicorn
+  (`GUNICORN_WORKERS`, default 3), published on `127.0.0.1:8000` only;
+  static and media bind-mounted to `/srv/pos/…` so host nginx can read
+  them (a home directory is 750 on Ubuntu, nginx can't); log rotation
+  (10 MB × 3) so container logs cannot fill the disk.
+- **nginx sets `X-Forwarded-Proto $scheme`** itself, which is what makes
+  `SECURE_PROXY_SSL_HEADER` safe; `client_max_body_size 10m` for images and
+  the stock import.
+
+## Todo
+
+- [x] `config/settings.py`: `SECRET_KEY` and `DATABASE_URL` required when
+      `DEBUG` is off; `CSRF_TRUSTED_ORIGINS`; `SECURE_PROXY_SSL_HEADER`;
+      `SESSION_COOKIE_SECURE` / `CSRF_COOKIE_SECURE` when `DEBUG` is off
+- [x] `docker/entrypoint.sh`: wait on `DATABASE_URL`'s host and port
+- [x] `.env.example`: `DATABASE_URL`, `CSRF_TRUSTED_ORIGINS`, production
+      values shown in comments
+- [x] `docker-compose.prod.yml` (new)
+- [x] `deploy/nginx/pos.conf` (new)
+- [x] `deploy/README.md` (new): the EC2 steps, first deploy and updates
+- [x] Run the suite; `manage.py check --deploy` with production-like env;
+      bring the production compose up locally and check it serves
+- [x] CLAUDE.md "Running it": a short production paragraph
+
+## Review
+
+255 tests pass. Nothing changes for development: with `DEBUG` on, the
+database and key fall back to what docker-compose runs.
+
+- **`config/settings.py` v1.1.0** — `DEBUG` first; `SECRET_KEY` and
+  `DATABASE_URL` (`env.db()`) required when it is off; `CSRF_TRUSTED_ORIGINS`;
+  `SECURE_PROXY_SSL_HEADER`; admin cookies Secure when `DEBUG` is off. The
+  `POSTGRES_*` settings are gone from Django; they stay for the container.
+- **`docker/entrypoint.sh` v1.1.0** — waits on `DATABASE_URL`'s host and port.
+- **`.env.example` v1.1.0** — `DATABASE_URL`, `CSRF_TRUSTED_ORIGINS`,
+  `GUNICORN_WORKERS`, production values in comments.
+- **`docker-compose.prod.yml` v1.0.0 (new)**, **`deploy/nginx/pos.conf`
+  v1.0.0 (new)**, **`deploy/README.md` v1.0.0 (new)** — as planned.
+- **`.dockerignore` v1.0.1** — not in the plan: `backups/` (real shop data)
+  and `.git/` kept out of the image.
+- **CLAUDE.md** — a "Production (one EC2)" paragraph.
+
+**Checked locally:**
+- `DEBUG=0` without `SECRET_KEY`, or without `DATABASE_URL`, refuses to
+  start, naming the missing variable.
+- `check --deploy`: only W004 (no HSTS) and W008 (no SSL redirect in
+  Django). certbot's nginx redirect covers W008; HSTS is left until HTTPS
+  is known to work, since browsers remember it.
+- The production compose, run under its own project name: migrations,
+  163 static files collected, gunicorn up, 0 restarts; Postgres not
+  published; web on 127.0.0.1 only.
+- Over HTTP with `X-Forwarded-Proto: https`: the refresh cookie and the
+  admin's `csrftoken` are Secure; a foreign Host gets 400; a 404 is plain;
+  an admin sign-in POST gets 302 into `/admin/`, and the same POST from a
+  foreign origin gets 403.
+- `pos.conf` in an nginx container in front of it: `nginx -t` passes; `/`,
+  `/sell` and other screens serve Angular; brand, `/admin/` and the admin's
+  static files pass through; `/api/docs/` and `/api/schema/` are 404.
+- Everything the check created was removed again.
+
+Not done: HTTPS itself (certbot runs on the server), and anything on EC2.

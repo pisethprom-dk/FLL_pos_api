@@ -91,6 +91,19 @@ restoring a dump (`backups/`, git-ignored). Development only.
 API docs at `http://localhost:8000/api/docs/`. There is **no root view** — `/`
 returns 404 by design.
 
+### Production (one EC2)
+
+Owner's choices, 2026-10-09; steps in `deploy/README.md`. nginx on the host
+terminates TLS (certbot), serves the Angular build, `/static/` and `/media/`,
+and proxies `/api/` and `/admin/` to gunicorn on `127.0.0.1:8000`.
+`docker-compose.prod.yml` (project `pos-prod`) runs gunicorn and Postgres,
+which is not published; `deploy/nginx/pos.conf` is the site, and answers 404
+for `/api/docs/` and `/api/schema/`. Settings come from env: with `DEBUG`
+off, `SECRET_KEY` and `DATABASE_URL` are required and the server refuses to
+start without them; in development they fall back to the compose defaults.
+`SECURE_PROXY_SSL_HEADER` trusts `X-Forwarded-Proto` only because nginx
+always sets it itself. The entrypoint waits on `DATABASE_URL`'s host.
+
 ### Running tests without Postgres
 
 ```python

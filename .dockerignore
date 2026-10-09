@@ -1,3 +1,4 @@
+# v1.0.1
 __pycache__/
 *.py[cod]
 .env
@@ -5,3 +6,6 @@ __pycache__/
 db.sqlite3
 media/
 staticfiles/
+# database dumps hold real shop data; never bake them into an image
+backups/
+.git/
