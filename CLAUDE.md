@@ -1,4 +1,4 @@
-<!-- v1.4.10 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
+<!-- v1.4.11 — handover context for Claude Code. Place at the repo root as CLAUDE.md. -->
 # POS — tool shop, single outlet
 
 Back office for one hardware shop in Phnom Penh. Prices in US dollars, takes
@@ -136,7 +136,7 @@ container but `docker compose logs web` keeps its output.
 | — | `warranty` | Done — the warranty claims log (added 2026-10-06, with the frontend's step 5c-5) |
 | 6 | `reports` | Done (2026-10-07): daily sales, stock on hand, receivables, the dashboard |
 
-255 tests passing.
+257 tests passing.
 
 **Inventory must come before sales.** A sale decrements stock and stamps a
 cost; both live in the movement ledger. Building sales first means writing the
@@ -316,8 +316,14 @@ the current one. Tabs in one browser share the cookie, so they are one session.
 `users/schema.py` tells drf-spectacular the subclass is the same `jwtAuth`
 scheme — its extension does not match subclasses.
 
-Serve Angular and the API from one origin through nginx. Cross-origin cookies
-with credentials are a harder problem than it looks.
+**The app and the API are two origins in production** (owner's choice,
+2026-10-14): the app at `https://pos.bgs-badminton.store` calls this API at
+`https://bgs-badminton.store/api/`. `CORS_ALLOWED_ORIGINS` (in `.env`) must
+list the app's address; `CORS_ALLOW_CREDENTIALS` is on. The refresh cookie
+still works — the two names are one site, so `SameSite=Lax` lets it through,
+and the app sends its sign-in calls with credentials. Image fields must go
+out as full addresses: give the serializer the request (`context`), as the
+brand and profile views now do.
 
 **One public endpoint besides login and refresh:** `GET /api/company/brand/`
 returns the shop's name, Khmer name, address and logo for the sign-in page —
