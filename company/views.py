@@ -1,4 +1,4 @@
-# v1.0.2
+# v1.0.3
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -32,7 +32,11 @@ class CompanyBrandView(APIView):
 
     @extend_schema(responses={200: CompanyBrandSerializer})
     def get(self, request):
-        return Response(CompanyBrandSerializer(CompanyProfile.get()).data)
+        # With the request, the logo is a full address (https://…/media/…), as on
+        # every other endpoint: the app may run on another origin than the API.
+        return Response(
+            CompanyBrandSerializer(CompanyProfile.get(), context={"request": request}).data
+        )
 
 
 class CompanyProfileView(APIView):
@@ -42,12 +46,14 @@ class CompanyProfileView(APIView):
 
     @extend_schema(responses={200: CompanyProfileSerializer})
     def get(self, request):
-        return Response(CompanyProfileSerializer(CompanyProfile.get()).data)
+        return Response(
+            CompanyProfileSerializer(CompanyProfile.get(), context={"request": request}).data
+        )
 
     @extend_schema(request=CompanyProfileSerializer, responses={200: CompanyProfileSerializer})
     def patch(self, request):
         serializer = CompanyProfileSerializer(
-            CompanyProfile.get(), data=request.data, partial=True
+            CompanyProfile.get(), data=request.data, partial=True, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         serializer.save(updated_by=request.user)

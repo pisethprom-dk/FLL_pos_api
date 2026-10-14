@@ -1,4 +1,4 @@
-# v1.0.3 — the company rules that matter
+# v1.0.4 — the company rules that matter
 from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -175,6 +175,13 @@ class CompanyBrandTests(TestCase):
         self.assertEqual(res.data["name"], "FLL")
         self.assertEqual(res.data["name_kh"], "ហាងលក់ឧបករណ៍ជាង")
 
+    def test_the_logo_is_a_full_address(self):
+        # The app may run on another origin than the API, so "/media/…" alone
+        # would point at the app's own server.
+        CompanyProfile.objects.update(logo="company/fll-logo.jpg")
+        res = self.client.get("/api/company/brand/")
+        self.assertEqual(res.data["logo"], "http://testserver/media/company/fll-logo.jpg")
+
     def test_it_shows_nothing_beyond_name_address_and_logo(self):
         res = self.client.get("/api/company/brand/")
         self.assertEqual(set(res.data), {"name", "name_kh", "address", "logo"})
@@ -225,6 +232,15 @@ class CompanyApiTests(TestCase):
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(CompanyProfile.get().name, "Sok Heng Mart")
+
+    def test_the_profile_gives_the_logo_a_full_address_read_and_saved(self):
+        CompanyProfile.get()
+        CompanyProfile.objects.update(logo="company/fll-logo.jpg")
+        self._as(self.admin, "owner-pass-99")
+        full = "http://testserver/media/company/fll-logo.jpg"
+        self.assertEqual(self.client.get("/api/company/profile/").data["logo"], full)
+        res = self.client.patch("/api/company/profile/", {"name": "Sok Heng Mart"}, format="json")
+        self.assertEqual(res.data["logo"], full)
 
     def test_rate_endpoint_gives_the_till_what_it_needs(self):
         self._as(self.seller, "counter-pass-99")
